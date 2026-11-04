@@ -1,0 +1,6 @@
+# Copy to backend.hcl (git-ignored) with the bucket that bootstrap/ created.
+bucket       = "ringee-tfstate-<PROD_ACCOUNT_ID>"
+key          = "prod/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

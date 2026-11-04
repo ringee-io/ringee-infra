@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars if you need to change a default.
+# running           = true          # cutover night, plan §10 step 10
+# api_min_tasks     = 1             # until AWS-06 is live
+# alarm_emails      = ["you@example.com"]
+# health_check_fqdn = "api.ringee.io"

@@ -1,0 +1,7 @@
+# After the first apply (local state), copy to backend.hcl, add `backend "s3" {}`
+# to main.tf and run: terraform init -migrate-state -backend-config=backend.hcl
+bucket       = "ringee-tfstate-<ACCOUNT_ID>"
+key          = "bootstrap/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

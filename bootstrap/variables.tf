@@ -1,3 +1,8 @@
+variable "account_id" {
+  description = "The AWS account of this env; the provider refuses any other."
+  type        = string
+}
+
 variable "env" {
   description = "prod or staging: names the roles' scope and the GitHub environment check."
   type        = string

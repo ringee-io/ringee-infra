@@ -18,6 +18,8 @@ terraform {
 
 provider "aws" {
   region = var.region
+  # A wrong AWS_PROFILE fails here instead of touching the other account.
+  allowed_account_ids = ["699340623836"]
 
   default_tags {
     tags = {

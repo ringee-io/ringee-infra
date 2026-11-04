@@ -34,15 +34,22 @@ Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API)
 
 Requisitos: AWS-03 hecho (Organizations, `ringee-prod` y `ringee-staging`, IAM Identity Center), `aws configure sso` con un perfil por cuenta, y Terraform 1.10 o más nuevo. Cada paso se hace primero en staging.
 
-1. **Bootstrap** (por cuenta, con el perfil de esa cuenta):
+1. **Bootstrap**, una vez por cuenta, en el workspace del mismo nombre:
 
    ```bash
    cd bootstrap
    terraform init
-   terraform apply -var-file=prod.tfvars        # o staging.tfvars
+   terraform workspace new staging    # o: terraform workspace select staging
+   AWS_PROFILE=ringee-staging terraform apply -var-file=staging.tfvars
+   terraform workspace new prod
+   AWS_PROFILE=ringee-prod terraform apply -var-file=prod.tfvars
    ```
 
-   Después mueve su state al bucket que creó: copia `backend.hcl.example` a `backend.hcl`, añade `backend "s3" {}` dentro del bloque `terraform` de `main.tf` y corre `terraform init -migrate-state -backend-config=backend.hcl`.
+   Su state queda en `terraform.tfstate.d/<env>/` (fuera de git). Guarda una copia en el bucket de esa cuenta después de cada apply:
+
+   ```bash
+   AWS_PROFILE=ringee-prod aws s3 cp terraform.tfstate.d/prod/terraform.tfstate s3://ringee-tfstate-405762675020/bootstrap/terraform.tfstate
+   ```
 
 2. **Backend del entorno:** copia `envs/prod/backend.hcl.example` a `backend.hcl` con el ID de la cuenta y corre `terraform init -backend-config=backend.hcl`.
 

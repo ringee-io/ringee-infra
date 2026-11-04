@@ -6,5 +6,4 @@ crash.log
 .terraform.tfstate.lock.info
 # Real backend settings hold account ids; keep only the examples in git.
 envs/*/backend.hcl
-bootstrap/backend.hcl
 __pycache__/

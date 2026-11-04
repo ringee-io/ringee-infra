@@ -1,6 +1,7 @@
-# Run once per account (ringee-prod, ringee-staging) with an SSO admin session,
-# local state first; then move the state into the bucket it created (README,
-# "Bootstrap"). Creates:
+# Run once per account (ringee-prod, ringee-staging) with that account's SSO
+# profile, in the workspace named after the env. Its state stays local (one per
+# workspace, git-ignored) with a copy in the bucket it creates: see README,
+# "Bootstrap". Creates:
 # - the state bucket (versioned, encrypted, private, TLS only, native locking);
 # - GitHub's OIDC provider and three roles, so no AWS key ever lives in GitHub:
 #   terraform-plan  ringee-infra pull requests       read-only + state
@@ -21,6 +22,8 @@ terraform {
 
 provider "aws" {
   region = var.region
+  # A wrong AWS_PROFILE fails here instead of building prod in staging.
+  allowed_account_ids = [var.account_id]
 
   default_tags {
     tags = {
@@ -46,6 +49,11 @@ resource "aws_s3_bucket" "state" {
 
   lifecycle {
     prevent_destroy = true
+
+    precondition {
+      condition     = terraform.workspace == var.env
+      error_message = "Run in the workspace of this env: terraform workspace select ${var.env}"
+    }
   }
 }
 

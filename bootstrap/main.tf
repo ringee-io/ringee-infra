@@ -3,16 +3,13 @@
 # workspace, git-ignored) with a copy in the bucket it creates: see README,
 # "Bootstrap". Creates:
 # - the state bucket (versioned, encrypted, private, TLS only, native locking);
-# - GitHub's OIDC provider and two roles, so no AWS key ever lives in GitHub:
+# - GitHub's OIDC provider and three roles, so no AWS key ever lives in GitHub:
 #   terraform-plan  ringee-infra pull requests and pushes to <branch>  read-only + state
+#   terraform-apply ringee-infra, <env> environment                    administrator
 #   deploy          ringee-app, <env> environment                      push to ECR, roll ECS
-#   In ringee-app (public) the <env> environment accepts only <branch> and
-#   production requires a reviewer (AWS-22).
-#
-# There is deliberately no apply role. ringee-infra is private, and below GitHub
-# Enterprise a private repository cannot make a job wait for a reviewer, so an
-# admin role trusted by GitHub could not be gated. Terraform is applied from a
-# workstation with an SSO session, after reading the plan.
+#   Both repositories are public, which is what lets GitHub Free enforce the
+#   environment rules: <env> accepts only <branch>, and production waits for a
+#   reviewer (AWS-22). Forks get neither secrets nor OIDC tokens.
 
 terraform {
   required_version = ">= 1.10"
@@ -139,7 +136,17 @@ data "aws_iam_policy_document" "trust" {
       "repo:${var.github_org}/${var.infra_repo}:pull_request",
       "repo:${var.github_org}/${var.infra_repo}:ref:refs/heads/${var.github_branch}",
     ]
-    deploy = ["repo:${var.github_org}/${var.app_repo}:environment:${var.github_environment}"]
+    # GitHub environment names are case-insensitive, and ringee-app already has
+    # a "Production" environment (created by Vercel). Which casing reaches the
+    # token is not documented, so both are accepted.
+    terraform-apply = distinct([
+      "repo:${var.github_org}/${var.infra_repo}:environment:${var.github_environment}",
+      "repo:${var.github_org}/${var.infra_repo}:environment:${title(var.github_environment)}",
+    ])
+    deploy = distinct([
+      "repo:${var.github_org}/${var.app_repo}:environment:${var.github_environment}",
+      "repo:${var.github_org}/${var.app_repo}:environment:${title(var.github_environment)}",
+    ])
   }
 
   statement {
@@ -201,6 +208,11 @@ resource "aws_iam_role_policy" "plan_state" {
       },
     ]
   })
+}
+
+resource "aws_iam_role_policy_attachment" "apply_admin" {
+  role       = aws_iam_role.github["terraform-apply"].name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
 resource "aws_iam_role_policy" "deploy" {

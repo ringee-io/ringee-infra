@@ -34,6 +34,6 @@ variable "github_branch" {
 }
 
 variable "github_environment" {
-  description = "ringee-app environment whose jobs may assume the deploy role."
+  description = "GitHub environment (same name in ringee-app and ringee-infra) whose jobs may assume the deploy and apply roles."
   type        = string
 }

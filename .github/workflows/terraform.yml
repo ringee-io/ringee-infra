@@ -1,12 +1,17 @@
 name: Terraform
 
-# Checks and plans; it never applies. A pull request into `staging` or `main`
-# plans that environment, and so does a push to either branch, so the plan of
-# what landed is always on record (job summary).
+# A pull request into `staging` or `main` plans that environment. A push plans
+# it and, when the repository variable TF_APPLY_ENVIRONMENTS lists it
+# ("staging", later "staging,production"), applies it under the GitHub
+# environment's rules: `staging` accepts only its branch; `production` accepts
+# only `main` and waits for a reviewer, who approves the plan printed by the
+# plan job.
 #
-# Apply runs from a workstation with an SSO session (README): ringee-infra is
-# private, and below GitHub Enterprise a private repository cannot make a job
-# wait for a reviewer. The plan role (bootstrap/) is read-only.
+# The apply job plans again and stops if the change summary differs from the
+# reviewed one. No plan file is uploaded: artifacts of a public repository can
+# be downloaded by anyone, and a plan holds the generated secrets (the log only
+# shows them as "(sensitive value)"). The first apply of an environment runs
+# from a workstation, certificate first (README).
 
 on:
   pull_request:
@@ -20,13 +25,41 @@ permissions:
 
 concurrency:
   group: terraform-${{ github.base_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   TF_VERSION: 1.17.1
   AWS_REGION: us-east-1
 
 jobs:
+  target:
+    name: Pick environment
+    runs-on: ubuntu-latest
+    outputs:
+      stack: ${{ steps.pick.outputs.stack }}
+      account: ${{ steps.pick.outputs.account }}
+      environment: ${{ steps.pick.outputs.environment }}
+      apply: ${{ steps.pick.outputs.apply }}
+    steps:
+      - id: pick
+        env:
+          BRANCH: ${{ github.base_ref || github.ref_name }}
+          APPLY_ENVIRONMENTS: ${{ vars.TF_APPLY_ENVIRONMENTS }}
+        run: |
+          case "$BRANCH" in
+            main) stack=prod; account=405762675020; environment=production ;;
+            staging) stack=staging; account=699340623836; environment=staging ;;
+            *) echo "::error::$BRANCH has no environment"; exit 1 ;;
+          esac
+          apply=false
+          if [[ ",${APPLY_ENVIRONMENTS// /}," == *",$environment,"* ]]; then apply=true; fi
+          {
+            echo "stack=$stack"
+            echo "account=$account"
+            echo "environment=$environment"
+            echo "apply=$apply"
+          } >> "$GITHUB_OUTPUT"
+
   test:
     name: Format and module tests
     runs-on: ubuntu-latest
@@ -40,25 +73,21 @@ jobs:
       - run: terraform -chdir=modules/stack test
 
   plan:
-    name: Plan
-    needs: test
+    name: Plan ${{ needs.target.outputs.stack }}
+    needs: [target, test]
+    # Pull requests from forks get no OIDC token; skip them instead of failing.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    outputs:
+      summary: ${{ steps.plan.outputs.summary }}
+      changes: ${{ steps.plan.outputs.changes }}
+    env:
+      STACK: ${{ needs.target.outputs.stack }}
+      ACCOUNT: ${{ needs.target.outputs.account }}
     steps:
-      - id: target
-        env:
-          BRANCH: ${{ github.base_ref || github.ref_name }}
-        run: |
-          case "$BRANCH" in
-            main) stack=prod; account=405762675020 ;;
-            staging) stack=staging; account=699340623836 ;;
-            *) echo "::error::$BRANCH has no environment"; exit 1 ;;
-          esac
-          echo "stack=$stack" >> "$GITHUB_OUTPUT"
-          echo "account=$account" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -66,25 +95,76 @@ jobs:
           terraform_wrapper: false
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ steps.target.outputs.account }}:role/github-terraform-plan
+          role-to-assume: arn:aws:iam::${{ needs.target.outputs.account }}:role/github-terraform-plan
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Plan ${{ steps.target.outputs.stack }}
-        env:
-          STACK: ${{ steps.target.outputs.stack }}
-          ACCOUNT: ${{ steps.target.outputs.account }}
+          mask-aws-account-id: true
+      - name: Init
         run: |
-          set -o pipefail
           terraform -chdir="envs/$STACK" init -input=false \
             -backend-config="bucket=ringee-tfstate-$ACCOUNT" \
             -backend-config="key=$STACK/terraform.tfstate" \
             -backend-config="region=$AWS_REGION" \
             -backend-config="encrypt=true" \
             -backend-config="use_lockfile=true"
-          terraform -chdir="envs/$STACK" plan -input=false -lock-timeout=5m -no-color | tee plan.txt
+      - id: plan
+        name: Plan
+        run: |
+          set +e
+          terraform -chdir="envs/$STACK" plan -input=false -lock-timeout=5m -no-color -detailed-exitcode > plan.txt
+          code=$?
+          set -e
+          cat plan.txt
+          [[ $code == 1 ]] && exit 1
+          summary=$(grep -E '^(Plan:|No changes\.)' plan.txt | head -1)
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+          echo "changes=$([[ $code == 2 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           {
-            echo "### Plan for $STACK"
+            echo "### $STACK: $summary"
             echo '```'
-            grep -E '^(Plan:|No changes|  # )' plan.txt || true
+            grep -E '^  # ' plan.txt || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply ${{ needs.target.outputs.stack }}
+    needs: [target, plan]
+    if: github.event_name != 'pull_request' && needs.target.outputs.apply == 'true' && needs.plan.outputs.changes == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.target.outputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STACK: ${{ needs.target.outputs.stack }}
+      ACCOUNT: ${{ needs.target.outputs.account }}
+      REVIEWED: ${{ needs.plan.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ needs.target.outputs.account }}:role/github-terraform-apply
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+      - name: Init
+        run: |
+          terraform -chdir="envs/$STACK" init -input=false \
+            -backend-config="bucket=ringee-tfstate-$ACCOUNT" \
+            -backend-config="key=$STACK/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+      - name: Plan again and compare with the reviewed plan
+        run: |
+          terraform -chdir="envs/$STACK" plan -input=false -lock-timeout=5m -no-color -out=tfplan > plan.txt
+          cat plan.txt
+          summary=$(grep -E '^(Plan:|No changes\.)' plan.txt | head -1)
+          if [[ $summary != "$REVIEWED" ]]; then
+            echo "::error::The plan changed since it was reviewed ($REVIEWED → $summary). Re-run the workflow."
+            exit 1
+          fi
+      - name: Apply
+        run: terraform -chdir="envs/$STACK" apply -input=false -lock-timeout=5m tfplan

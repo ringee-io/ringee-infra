@@ -105,12 +105,15 @@ Hasta que AWS-06 (SSE por Redis) corra estable en Railway, deja `api_min_tasks =
 ## CI/CD
 
 - **App → AWS** (`.github/workflows/deploy-aws.yml` en `ringee-app`): un push a `staging` despliega en la cuenta de staging y uno a `main` en la de prod, después de tu aprobación. Construye las imágenes en ARM64, las sube a ECR, corre `migrate` cuando `RUN_MIGRATIONS` es `true` (AWS-09), actualiza los servicios y hace un smoke test. Usa el rol `github-deploy`.
-- **Este repo** (`.github/workflows/terraform.yml`): `fmt`, `terraform test` y `plan` en cada PR y en cada push a `staging` o `main`, con el rol de solo lectura `github-terraform-plan`. **Nunca aplica.** Por debajo de GitHub Enterprise, un repo privado no puede hacer que un job espere a un revisor. El apply se hace desde tu Mac después de leer el plan:
+- **Este repo** (`.github/workflows/terraform.yml`): `fmt`, `terraform test` y `plan` en cada PR y en cada push a `staging` o `main`, con el rol de solo lectura `github-terraform-plan`. En un push, si `TF_APPLY_ENVIRONMENTS` incluye ese entorno, aplica con `github-terraform-apply` bajo las reglas del entorno de GitHub: `staging` sin revisor y `production` con tu aprobación. El job de apply vuelve a planificar y se detiene si el resumen no coincide con el que revisaste. No sube el plan como artefacto, porque en un repo público cualquiera puede descargarlo y el plan guarda los secretos generados.
+- **El primer apply de cada entorno se hace desde tu Mac**, empezando por el certificado (ver "Orden de arranque"):
   ```bash
   cd envs/staging
   AWS_PROFILE=ringee-staging terraform init -backend-config=backend.hcl
   AWS_PROFILE=ringee-staging terraform apply
   ```
+
+Los dos repos son públicos. Eso es lo que permite, con GitHub Free, que los entornos exijan branch y revisor. Los PRs de forks no reciben secretos ni tokens OIDC.
 
 En `ringee-app` (_Settings → Environments_):
 
@@ -120,6 +123,15 @@ En `ringee-app` (_Settings → Environments_):
 | `production` | `main`              | tú, con _Prevent self-review_ desactivado | `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::405762675020:role/github-deploy`, `API_HOST` = `api.ringee.io`, `RUN_MIGRATIONS` = `false`         |
 
 La variable de repositorio `AWS_DEPLOY_ENVIRONMENTS` decide quién despliega: sin definir, nadie; `staging` cuando el staging esté arriba; `staging,production` la semana del corte. Mientras tanto Railway sigue desplegando `main`.
+
+En `ringee-infra` (_Settings → Environments_), sin variables:
+
+| Entorno      | Branches que acepta | Revisor                                   |
+| ------------ | ------------------- | ----------------------------------------- |
+| `staging`    | `staging`           | ninguno                                   |
+| `production` | `main`              | tú, con _Prevent self-review_ desactivado |
+
+La variable de repositorio `TF_APPLY_ENVIRONMENTS` hace lo mismo para Terraform: sin definir, el CI solo planifica. Se define después del primer apply de cada entorno. Además, en _Settings → Actions → General_, elige _Require approval for all external contributors_ en los workflows de PRs de forks.
 
 ## Operación
 

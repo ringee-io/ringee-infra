@@ -16,8 +16,10 @@ holds a value equal to production's that is not plain configuration: a
 production credential cannot reach staging by mistake. Values are only ever
 sent to Secrets Manager through the AWS CLI's stdin, never printed.
 
-Staging needs its own accounts: Telnyx, Stripe test mode, a Clerk development
-instance, a separate R2 bucket and Firebase project, development OAuth apps.
+Staging needs its own accounts: Stripe test mode, a Clerk development instance,
+a separate R2 bucket and Firebase project, development OAuth apps. Telnyx is the
+exception: staging uses production's account with its own Call Control app, SIP
+connection and profiles (SHARED_WITH_PRODUCTION).
 """
 
 import argparse
@@ -54,6 +56,10 @@ PROVIDER_URL_ENDINGS = ("_API_BASE_URL", "_OAUTH_AUTHORIZE_URL", "_OAUTH_TOKEN_U
 # Required at boot but unused in staging: any non-empty value lets it start.
 PLACEHOLDER = "disabled-in-staging"
 PLACEHOLDER_KEYS = {"WHATSAPP_PHONE_ID", "WHATSAPP_TOKEN", "WHATSAPP_VERIFY_TOKEN", "WHATSAPP_PHONE_NUMBER"}
+# Equal to production's by design since staging shares the Telnyx account (2026-11-04).
+# Neither is a credential: the account's webhook-verification public key and the public
+# caller ID number, which stays on production's connection and is only presented as ANI.
+SHARED_WITH_PRODUCTION = {"TELNYX_PUBLIC_KEY", "RINGEE_PUBLIC_CALLER_ID"}
 
 
 def railway_env():
@@ -206,7 +212,8 @@ def load(args) -> None:
     empty_required = [n for n in names if n in required and not staging.get(n)]
     from_production = [
         n for n in names
-        if staging.get(n) and staging[n] == prod.get(n) and not is_plain_config(n, staging[n])
+        if n not in SHARED_WITH_PRODUCTION
+        and staging.get(n) and staging[n] == prod.get(n) and not is_plain_config(n, staging[n])
     ]
     problems = []
     if missing:

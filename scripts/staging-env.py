@@ -73,6 +73,8 @@ def looks_random(value: str) -> bool:
 
 def is_plain_config(name: str, value: str) -> bool:
     """True for values that can be copied to staging as they are."""
+    if value == "*":  # a wildcard ("every organization") names no account
+        return True
     if not value or name.endswith(SPECIFIC_ENDINGS):
         return False
     if name.endswith(PROVIDER_URL_ENDINGS):

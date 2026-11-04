@@ -176,6 +176,14 @@ La variable de repositorio `TF_APPLY_ENVIRONMENTS` hace lo mismo para Terraform:
 
 Comprobado el 4 de noviembre de 2026, sin cuenta de AWS: `terraform validate` en las tres raíces y `terraform test` en `modules/stack`. El test aplica el stack completo contra proveedores simulados, en las variantes prod, parado y staging, y comprueba que las dos guardas de `config/secret-keys.json` frenan el plan. `scripts/railway-env.py` corrió en seco contra Railway.
 
-Eso prueba que la configuración es coherente, no que AWS acepte cada valor; lo confirma el primer `apply` en staging. Confirmado el 4 de noviembre de 2026: Valkey `8.2` (familia `valkey8`) existe en us-east-1, y las etiquetas `temporalio/server:1.29.7`, `temporalio/admin-tools:1.29.7-tctl-1.18.4-cli-1.7.2`, `temporalio/ui:2.54.1` y `postgres:17-alpine` existen en Docker Hub. Queda sin verificar la conexión de Temporal a RDS con `SQL_TLS_ENABLED=true` sin comprobar el certificado: va cifrada dentro de la VPC, y verificarlo exigiría meter el bundle de la CA de RDS en la imagen.
+**Staging en AWS, 4 de noviembre de 2026.** El primer `apply` real levantó el stack completo. Corrieron `db-bootstrap`, `temporal-schema` (`temporal` 1.18, `temporal_visibility` 1.9), `temporal-namespace` y `staging-schema.py` (133 tablas, sin datos). _Deploy app_ construyó el branch `staging` de ringee-app en ARM64, y con `running = true` la API responde `200` en `https://api.staging.ringee.io/api/health`. El orchestrator se conecta a Temporal y crea sus 15 schedules. Temporal habla con RDS por TLS (`SQL_TLS_ENABLED=true`), aunque sin comprobar el certificado: va cifrado dentro de la VPC, y verificarlo exigiría meter el bundle de la CA de RDS en la imagen.
 
-Falta además: el workflow de deploy (AWS-21), la imagen ARM64 de `chatgpt-mcp` (AWS-10), las migraciones en git (AWS-09) y el runbook del corte (AWS-24, AWS-26).
+Ese primer apply destapó lo que los proveedores simulados no ven, ya corregido:
+
+- ECS rechaza un servicio cuyo target group todavía no usa ningún balanceador. Por eso `target_group_arns` espera a las reglas del listener, que a su vez esperan al certificado.
+- RDS informa `rds.force_ssl` como `pending-reboot`, y service discovery no devuelve el bloque vacío `health_check_custom_config`. Sin los ajustes, cada plan mostraba cambios.
+- El `ENTRYPOINT` de `temporalio/admin-tools` es `tini -- sleep infinity`, así que cualquier comando quedaba como argumento de `sleep`. `temporal-admin` fija `entry_point = ["tini", "--"]`.
+- En una cuenta nueva, el primer `CreateReplicationGroup` puede fallar con `InvalidCredentialsException` mientras se propaga el rol de servicio de ElastiCache. Basta con reintentar.
+- GitHub firma los tokens OIDC de esta organización con IDs inmutables (`repo:ringee-io@262492135/<repo>@<id>:…`), y los roles del bootstrap confían en ese formato.
+
+Falta: la imagen ARM64 de `chatgpt-mcp` (AWS-10, hoy pesa 1 GB), las migraciones en git (AWS-09), las credenciales de prueba de staging (hoy son falsas) y el runbook del corte (AWS-24, AWS-26).

@@ -185,6 +185,6 @@ Ese primer apply destapó lo que los proveedores simulados no ven, ya corregido:
 - RDS informa `rds.force_ssl` como `pending-reboot`, y service discovery no devuelve el bloque vacío `health_check_custom_config`. Sin los ajustes, cada plan mostraba cambios.
 - El `ENTRYPOINT` de `temporalio/admin-tools` es `tini -- sleep infinity`, así que cualquier comando quedaba como argumento de `sleep`. `temporal-admin` fija `entry_point = ["tini", "--"]`.
 - En una cuenta nueva, el primer `CreateReplicationGroup` puede fallar con `InvalidCredentialsException` mientras se propaga el rol de servicio de ElastiCache. Basta con reintentar.
-- GitHub firma los tokens OIDC de esta organización con IDs inmutables (`repo:ringee-io@262492135/<repo>@<id>:…`), y los roles del bootstrap confían en ese formato.
+- El formato del `sub` de los tokens OIDC de GitHub depende del repositorio. ringee-infra firma con IDs inmutables (`repo:ringee-io@262492135/ringee-infra@<id>:…`), y su forma simple se rechaza. ringee-app firma con la forma simple (`repo:ringee-io/ringee-app:…`), como mostró CloudTrail en el primer push a `staging`. `github-deploy` acepta las dos formas para ringee-app. El `sub` real aparece en el evento `AssumeRoleWithWebIdentity` de CloudTrail, en `userIdentity.userName`.
 
 Falta: la imagen ARM64 de `chatgpt-mcp` (AWS-10, hoy pesa 1 GB), las migraciones en git (AWS-09), las credenciales de prueba de staging (hoy son falsas) y el runbook del corte (AWS-24, AWS-26).

@@ -43,12 +43,18 @@ locals {
   bucket_name = "ringee-tfstate-${local.account_id}"
   oidc_host   = "token.actions.githubusercontent.com"
 
-  # GitHub signs this organization's tokens with immutable ids in the subject
-  # (repo:OWNER@OWNER_ID/REPO@REPO_ID:...), as CloudTrail showed on 2026-11-04;
-  # the plain repo:OWNER/REPO form is refused. A repository deleted and created
-  # again under the same name gets a new id, so it cannot assume these roles.
+  # The OIDC subject format is per repository, as CloudTrail showed on
+  # 2026-11-04. ringee-infra signs with immutable ids
+  # (repo:OWNER@OWNER_ID/REPO@REPO_ID:...), and its plain repo:OWNER/REPO form
+  # is refused. ringee-app signs the plain form. A repository deleted and
+  # created again under the same name gets a new id, so the immutable form
+  # can't be reused that way. ringee-app is trusted in both forms, so it keeps
+  # deploying if GitHub moves it to immutable ids.
   infra_subject = "repo:${var.github_org}@${var.github_org_id}/${var.infra_repo}@${var.infra_repo_id}"
-  app_subject   = "repo:${var.github_org}@${var.github_org_id}/${var.app_repo}@${var.app_repo_id}"
+  app_subjects = [
+    "repo:${var.github_org}/${var.app_repo}",
+    "repo:${var.github_org}@${var.github_org_id}/${var.app_repo}@${var.app_repo_id}",
+  ]
 }
 
 # ── State bucket ─────────────────────────────────────────────────────────────
@@ -150,13 +156,17 @@ data "aws_iam_policy_document" "trust" {
       "${local.infra_subject}:environment:${var.github_environment}",
       "${local.infra_subject}:environment:${title(var.github_environment)}",
     ])
-    deploy = distinct([
-      "${local.app_subject}:environment:${var.github_environment}",
-      "${local.app_subject}:environment:${title(var.github_environment)}",
+    deploy = distinct(concat(
+      flatten([for subject in local.app_subjects : [
+        "${subject}:environment:${var.github_environment}",
+        "${subject}:environment:${title(var.github_environment)}",
+      ]]),
       # .github/workflows/deploy-app.yml here (manual), through this repo's environment.
-      "${local.infra_subject}:environment:${var.github_environment}",
-      "${local.infra_subject}:environment:${title(var.github_environment)}",
-    ])
+      [
+        "${local.infra_subject}:environment:${var.github_environment}",
+        "${local.infra_subject}:environment:${title(var.github_environment)}",
+      ],
+    ))
   }
 
   statement {

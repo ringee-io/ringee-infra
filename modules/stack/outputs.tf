@@ -62,3 +62,7 @@ output "mirror_images" {
     "docker.io/library/postgres:${var.postgres_image_tag}"                 = local.images.postgres
   }
 }
+
+output "ops_bucket" {
+  value = aws_s3_bucket.ops.bucket
+}

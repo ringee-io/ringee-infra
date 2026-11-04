@@ -423,10 +423,13 @@ module "temporal_admin" {
   # Default command: create or upgrade both Temporal schemas (before the server
   # starts). run-task.sh temporal-namespace overrides it to register the
   # "default" namespace once the server is up.
-  image   = local.images.admin_tools
-  cpu     = 256
-  memory  = 512
-  command = ["sh", "-c", file("${path.module}/scripts/temporal-schema.sh")]
+  # The image's ENTRYPOINT is `tini -- sleep infinity`: any command would only
+  # be appended to sleep's arguments. Keep tini, drop the sleep.
+  image       = local.images.admin_tools
+  cpu         = 256
+  memory      = 512
+  entry_point = ["tini", "--"]
+  command     = ["sh", "-c", file("${path.module}/scripts/temporal-schema.sh")]
 
   environment = {
     SQL_PLUGIN                        = "postgres12"
@@ -456,8 +459,86 @@ module "ops" {
   memory  = 2048
   command = ["sh", "-c", "echo 'pass a command: scripts/run-task.sh ops -- <command>'; exit 2"]
 
-  environment = { PGSSLMODE = "require" }
-  secrets     = { PG_URL_APP = "${local.generated}:PG_URL_APP::" }
+  environment = {
+    PGSSLMODE  = "require"
+    OPS_BUCKET = aws_s3_bucket.ops.bucket
+  }
+  secrets = { PG_URL_APP = "${local.generated}:PG_URL_APP::" }
+
+  extra_task_policy = true
+  task_policy_json = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "${aws_s3_bucket.ops.arn}/*" },
+      { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.ops.arn },
+    ]
+  })
+}
+
+# ── Ops bucket ───────────────────────────────────────────────────────────────
+# Files the ops task reads or writes: a schema to load, the cutover dump (plan
+# §10 step 8). Private, encrypted, TLS only; objects expire after 30 days.
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "ops" {
+  bucket = "${local.name}-ops-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "ops" {
+  bucket                  = aws_s3_bucket.ops.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_ownership_controls" "ops" {
+  bucket = aws_s3_bucket.ops.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "ops" {
+  bucket = aws_s3_bucket.ops.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "ops" {
+  bucket = aws_s3_bucket.ops.id
+
+  rule {
+    id     = "expire"
+    status = "Enabled"
+    filter {}
+
+    expiration {
+      days = 30
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "ops" {
+  bucket = aws_s3_bucket.ops.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "TlsOnly"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.ops.arn, "${aws_s3_bucket.ops.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
 }
 
 # ── Alarms (prod) and off-hours schedule (staging) ───────────────────────────

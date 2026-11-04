@@ -23,8 +23,9 @@ variable "temporal_version" {
 }
 
 variable "temporal_admin_tools_version" {
-  type    = string
-  default = "1.29.7"
+  description = "admin-tools tags carry the tctl and CLI versions; this is the one for server 1.29.7."
+  type        = string
+  default     = "1.29.7-tctl-1.18.4-cli-1.7.2"
 }
 
 variable "temporal_ui_version" {

@@ -36,6 +36,12 @@ variable "command" {
   default     = null
 }
 
+variable "entry_point" {
+  description = "Overrides the image ENTRYPOINT, for images whose entrypoint ignores the command. Null keeps it."
+  type        = list(string)
+  default     = null
+}
+
 variable "container_port" {
   type    = number
   default = null
@@ -131,6 +137,17 @@ variable "stop_timeout" {
   description = "Seconds between SIGTERM and SIGKILL (Fargate allows up to 120)."
   type        = number
   default     = 30
+}
+
+variable "extra_task_policy" {
+  description = "Attach task_policy_json to the task role. A flag, because the JSON is unknown until apply."
+  type        = bool
+  default     = false
+}
+
+variable "task_policy_json" {
+  type    = string
+  default = null
 }
 
 variable "log_retention_days" {

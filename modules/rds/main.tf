@@ -11,9 +11,12 @@ resource "aws_db_parameter_group" "this" {
   name   = var.name
   family = "postgres17"
 
+  # RDS reports this parameter as pending-reboot; with the default "immediate"
+  # every plan shows an update.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   # Slow queries only; full statement logging would cost more than it tells.

@@ -57,7 +57,13 @@ TASK_ARN=$(aws ecs run-task \
   --query 'tasks[0].taskArn' --output text)
 echo "started $TASK_ARN"
 
-aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+# The waiter gives up after 10 minutes, far more than any of these tasks needs.
+# A task still running by then is stuck: stop it rather than leave it billing.
+if ! aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"; then
+  echo "--- $TASK still running after 10 minutes: stopping it" >&2
+  aws ecs stop-task --cluster "$CLUSTER" --task "$TASK_ARN" --reason "run-task.sh: timed out" >/dev/null
+  aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN" || true
+fi
 EXIT_CODE=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0].containers[0].exitCode' --output text)
 REASON=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0].stoppedReason' --output text)
 

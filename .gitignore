@@ -7,3 +7,6 @@ crash.log
 # Real backend settings hold account ids; keep only the examples in git.
 envs/*/backend.hcl
 __pycache__/
+# Filled staging secrets and the production schema dump stay on this machine.
+*.env
+*.sql

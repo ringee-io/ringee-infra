@@ -24,7 +24,7 @@ variable "nodes" {
 variable "engine_version" {
   description = "Confirm with: aws elasticache describe-cache-engine-versions --engine valkey"
   type        = string
-  default     = "8.0"
+  default     = "8.2"
 }
 
 variable "parameter_group_name" {

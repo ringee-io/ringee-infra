@@ -8,6 +8,9 @@ output "arn_suffix" {
 
 output "target_group_arns" {
   value = { for key, tg in aws_lb_target_group.this : key => tg.arn }
+  # ECS refuses a service whose target group no balancer uses yet. The rules
+  # wait for the HTTPS listener, which waits for ACM to issue the certificate.
+  depends_on = [aws_lb_listener_rule.host]
 }
 
 output "target_group_arn_suffixes" {

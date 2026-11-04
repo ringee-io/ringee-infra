@@ -6,7 +6,7 @@
 # - GitHub's OIDC provider and three roles, so no AWS key ever lives in GitHub:
 #   terraform-plan  ringee-infra pull requests and pushes to <branch>  read-only + state
 #   terraform-apply ringee-infra, <env> environment                    administrator
-#   deploy          ringee-app, <env> environment                      push to ECR, roll ECS
+#   deploy          ringee-app or ringee-infra, <env> environment     push to ECR, roll ECS
 #   Both repositories are public, which is what lets GitHub Free enforce the
 #   environment rules: <env> accepts only <branch>, and production waits for a
 #   reviewer (AWS-22). Forks get neither secrets nor OIDC tokens.
@@ -146,6 +146,9 @@ data "aws_iam_policy_document" "trust" {
     deploy = distinct([
       "repo:${var.github_org}/${var.app_repo}:environment:${var.github_environment}",
       "repo:${var.github_org}/${var.app_repo}:environment:${title(var.github_environment)}",
+      # .github/workflows/deploy-app.yml here (manual), through this repo's environment.
+      "repo:${var.github_org}/${var.infra_repo}:environment:${var.github_environment}",
+      "repo:${var.github_org}/${var.infra_repo}:environment:${title(var.github_environment)}",
     ])
   }
 

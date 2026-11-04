@@ -28,7 +28,7 @@ Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API)
 - `ringee/<env>/shared`, `/api`, `/orchestrator` y `/chatgpt-mcp`: las variables de Railway. Las escribe `scripts/railway-env.py`; Terraform crea el contenedor y nunca lee ni escribe el valor.
 - `ringee/<env>/generated`: lo que crea este stack (contraseñas de los roles `ringee_app` y `temporal`, el token de Valkey y las URLs armadas con ellos). Está en el state, que por eso vive en un bucket privado, cifrado y con versiones.
 - La contraseña maestra de RDS la guarda RDS en su propio secreto y la rota él. Solo la usa la tarea `db-bootstrap`; las apps nunca.
-- **Staging lleva credenciales de prueba**: su propia cuenta de Telnyx, Stripe en modo test y Clerk de desarrollo. `railway-env.py` se niega a escribir fuera de producción.
+- **Staging nunca lleva credenciales de producción.** Desde el 4 de noviembre de 2026 arranca con valores falsos para Clerk, Resend y los demás servicios de terceros: la infraestructura y la configuración son reales, pero no hay login, llamadas, correos ni IA. Las de prueba vendrán después: su propia cuenta de Telnyx, Stripe en modo test y un Clerk solo para staging, ni el de prod ni el que se usa en local, porque el `privateMetadata.userId` de cada usuario de Clerk apunta a una sola base y la API lo reescribe en el primer login. `railway-env.py` se niega a escribir fuera de producción.
 
 ## Orden de arranque
 
@@ -102,6 +102,29 @@ Requisitos: AWS-03 hecho (Organizations, `ringee-prod` y `ringee-staging`, IAM I
 
 Hasta que AWS-06 (SSE por Redis) corra estable en Railway, deja `api_min_tasks = 1`.
 
+## Levantar staging
+
+Todo con `AWS_PROFILE=ringee-staging`, desde la raíz del repo salvo que se diga otra cosa.
+
+1. **Certificado** (en `envs/staging`): `terraform apply -target=module.stack.module.alb.aws_acm_certificate.this`. Crea en Cloudflare, en gris (solo DNS), los CNAME que muestra `aws acm describe-certificate`, y espera a que diga _Issued_.
+2. **Todo lo demás** (en `envs/staging`): `terraform apply`, con los servicios en 0 tareas. RDS y Valkey tardan unos 15 minutos.
+3. **DNS:** en Cloudflare, `api.staging.ringee.io` y `chatgpt.staging.ringee.io` como CNAME al balanceador (`terraform output -json stack`, campo `alb_dns_name`), en gris.
+4. **Imágenes de terceros:** `scripts/mirror-images.sh staging` (necesita `crane`).
+5. **Secretos:** `scripts/staging-env.py template` escribe `staging.env`, fuera de git. Ahí ya está copiada de prod la configuración que no es secreta, las URLs apuntan a staging y hay un `APP_ENCRYPTION_SECRET` nuevo. Rellena las credenciales de prueba (como mínimo las marcadas REQUIRED) y corre `scripts/staging-env.py load --expect-account 699340623836`. `load` rechaza cualquier valor igual al de producción. Guarda el archivo, o al menos su `APP_ENCRYPTION_SECRET`, en tu gestor de contraseñas: un `template` nuevo genera otra clave y lo cifrado en staging dejaría de leerse.
+   - Hoy las credenciales de terceros son falsas pero con formato válido, marcadas `DUMMY` en su comentario. La publishable key de Clerk apunta a una instancia que no existe: el `clerkMiddleware` global de la API rechaza una clave mal formada en cada petición, `/api/health` incluido. Los secretos de firma son aleatorios y las URLs usan `.invalid`.
+   - Para cambiar una credencial: edítala en `staging.env`, vuelve a correr `load` y reinicia el servicio con `aws ecs update-service --cluster ringee-staging --service <servicio> --force-new-deployment`. Las tareas leen los secretos al arrancar.
+6. **Bases:** `scripts/run-task.sh staging db-bootstrap` y `scripts/run-task.sh staging temporal-schema`.
+7. **Esquema de la app:** `scripts/staging-schema.py --expect-account 699340623836` copia la estructura de producción, sin datos, hasta que las migraciones estén en git (AWS-09). Lee producción con la URL pública de Railway, y su contraseña nunca sale de tu máquina.
+8. **Imágenes de la app:** en GitHub, _Actions → Deploy app → Run workflow_, eligiendo _Use workflow from: staging_. Construye `ringee-app` en su branch `staging` y registra las revisiones; los servicios siguen en 0. Para probar otro branch, ponlo en `app_ref`: mientras AWS-06, AWS-07 y AWS-33 no lleguen a `staging`, es `feat/aws-migration-prep`.
+9. **Encender:**
+   - Primero Temporal: `aws application-autoscaling register-scalable-target --service-namespace ecs --scalable-dimension ecs:service:DesiredCount --resource-id service/ringee-staging/temporal --min-capacity 1 --max-capacity 1`.
+   - Luego `scripts/run-task.sh staging temporal-namespace`.
+   - Al final, `running = true` en `envs/staging/terraform.tfvars` y `terraform apply`.
+10. **Comprobar:** `curl https://api.staging.ringee.io/api/health`. Staging se apaga los días laborables a las 22:00 y se enciende a las 08:00 (hora de RD); fuera de ese horario, `scripts/staging-power.sh on`.
+11. **Frontend y webhooks:** `staging.ringee.io` en Vercel, en el branch `staging`, y los webhooks de prueba hacia `https://api.staging.ringee.io`: Clerk en `/api/webhooks/clerk`, Stripe en `/api/stripe/webhook`, y Telnyx en `/api/call/webhook` (failover `/api/call/webhook/failover`) y `/api/messaging/webhook`.
+
+Después del primer apply, `TF_APPLY_ENVIRONMENTS=staging` deja que el CI aplique los cambios de este repo en cada push a `staging`.
+
 ## CI/CD
 
 - **App → AWS** (`.github/workflows/deploy-aws.yml` en `ringee-app`): un push a `staging` despliega en la cuenta de staging y uno a `main` en la de prod, después de tu aprobación. Construye las imágenes en ARM64, las sube a ECR, corre `migrate` cuando `RUN_MIGRATIONS` es `true` (AWS-09), actualiza los servicios y hace un smoke test. Usa el rol `github-deploy`.
@@ -153,10 +176,6 @@ La variable de repositorio `TF_APPLY_ENVIRONMENTS` hace lo mismo para Terraform:
 
 Comprobado el 4 de noviembre de 2026, sin cuenta de AWS: `terraform validate` en las tres raíces y `terraform test` en `modules/stack`. El test aplica el stack completo contra proveedores simulados, en las variantes prod, parado y staging, y comprueba que las dos guardas de `config/secret-keys.json` frenan el plan. `scripts/railway-env.py` corrió en seco contra Railway.
 
-Eso prueba que la configuración es coherente, no que AWS acepte cada valor. Lo confirma el primer `apply` en staging. Sin confirmar:
-
-- La versión de Valkey (`8.0`): `aws elasticache describe-cache-engine-versions --engine valkey`.
-- Las etiquetas `temporalio/server:1.29.7`, `temporalio/admin-tools:1.29.7` y `temporalio/ui:2.54.1`: `mirror-images.sh` falla si alguna no existe.
-- La conexión de Temporal a RDS con `SQL_TLS_ENABLED=true` sin verificar el certificado, que viaja cifrada dentro de la VPC. Para verificarlo haría falta meter el bundle de la CA de RDS en la imagen.
+Eso prueba que la configuración es coherente, no que AWS acepte cada valor; lo confirma el primer `apply` en staging. Confirmado el 4 de noviembre de 2026: Valkey `8.2` (familia `valkey8`) existe en us-east-1, y las etiquetas `temporalio/server:1.29.7`, `temporalio/admin-tools:1.29.7-tctl-1.18.4-cli-1.7.2`, `temporalio/ui:2.54.1` y `postgres:17-alpine` existen en Docker Hub. Queda sin verificar la conexión de Temporal a RDS con `SQL_TLS_ENABLED=true` sin comprobar el certificado: va cifrada dentro de la VPC, y verificarlo exigiría meter el bundle de la CA de RDS en la imagen.
 
 Falta además: el workflow de deploy (AWS-21), la imagen ARM64 de `chatgpt-mcp` (AWS-10), las migraciones en git (AWS-09) y el runbook del corte (AWS-24, AWS-26).

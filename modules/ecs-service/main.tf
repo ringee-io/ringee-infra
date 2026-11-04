@@ -47,6 +47,7 @@ locals {
       }
     },
     var.command == null ? {} : { command = var.command },
+    var.entry_point == null ? {} : { entryPoint = var.entry_point },
   )
 
   service_config = {
@@ -121,6 +122,13 @@ resource "aws_iam_role_policy" "task_exec" {
   })
 }
 
+resource "aws_iam_role_policy" "task_extra" {
+  count  = var.extra_task_policy ? 1 : 0
+  name   = "task"
+  role   = aws_iam_role.task.id
+  policy = var.task_policy_json
+}
+
 resource "aws_ecs_task_definition" "this" {
   family                   = local.full_name
   requires_compatibilities = ["FARGATE"]
@@ -152,6 +160,13 @@ resource "aws_service_discovery_service" "this" {
   }
 
   health_check_custom_config {}
+
+  # The API does not return the empty block, so without this every plan
+  # replaces the service (and with it Temporal's DNS name). It cannot change
+  # after creation anyway.
+  lifecycle {
+    ignore_changes = [health_check_custom_config]
+  }
 }
 
 resource "aws_ecs_service" "pipeline" {

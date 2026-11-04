@@ -57,7 +57,7 @@ module "stack" {
     performance_insights  = true
   }
 
-  valkey = { node_type = "cache.t4g.micro", nodes = 1, engine_version = "8.0" }
+  valkey = { node_type = "cache.t4g.micro", nodes = 1, engine_version = "8.2" }
 
   secret_keys                  = jsondecode(file("${path.module}/../../config/secret-keys.json"))
   secrets_recovery_window_days = 30

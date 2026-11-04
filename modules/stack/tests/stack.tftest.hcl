@@ -12,6 +12,10 @@ mock_provider "aws" {
     defaults = { region = "us-east-1" }
   }
 
+  mock_data "aws_caller_identity" {
+    defaults = { account_id = "111111111111" }
+  }
+
   mock_data "aws_iam_policy_document" {
     defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
@@ -118,7 +122,7 @@ variables {
     performance_insights  = true
   }
 
-  valkey = { node_type = "cache.t4g.micro", nodes = 1, engine_version = "8.0" }
+  valkey = { node_type = "cache.t4g.micro", nodes = 1, engine_version = "8.2" }
 
   secret_keys = {
     shared        = ["STRIPE_SECRET_KEY", "TELNYX_API_KEY"]
@@ -128,7 +132,7 @@ variables {
   }
 
   temporal_version             = "1.29.7"
-  temporal_admin_tools_version = "1.29.7"
+  temporal_admin_tools_version = "1.29.7-tctl-1.18.4-cli-1.7.2"
   temporal_ui_version          = "2.54.1"
   postgres_image_tag           = "17-alpine"
 

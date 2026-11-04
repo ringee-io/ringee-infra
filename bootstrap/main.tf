@@ -42,6 +42,13 @@ locals {
   account_id  = data.aws_caller_identity.current.account_id
   bucket_name = "ringee-tfstate-${local.account_id}"
   oidc_host   = "token.actions.githubusercontent.com"
+
+  # GitHub signs this organization's tokens with immutable ids in the subject
+  # (repo:OWNER@OWNER_ID/REPO@REPO_ID:...), as CloudTrail showed on 2026-11-04;
+  # the plain repo:OWNER/REPO form is refused. A repository deleted and created
+  # again under the same name gets a new id, so it cannot assume these roles.
+  infra_subject = "repo:${var.github_org}@${var.github_org_id}/${var.infra_repo}@${var.infra_repo_id}"
+  app_subject   = "repo:${var.github_org}@${var.github_org_id}/${var.app_repo}@${var.app_repo_id}"
 }
 
 # ── State bucket ─────────────────────────────────────────────────────────────
@@ -133,22 +140,22 @@ resource "aws_iam_openid_connect_provider" "github" {
 data "aws_iam_policy_document" "trust" {
   for_each = {
     terraform-plan = [
-      "repo:${var.github_org}/${var.infra_repo}:pull_request",
-      "repo:${var.github_org}/${var.infra_repo}:ref:refs/heads/${var.github_branch}",
+      "${local.infra_subject}:pull_request",
+      "${local.infra_subject}:ref:refs/heads/${var.github_branch}",
     ]
     # GitHub environment names are case-insensitive, and ringee-app already has
     # a "Production" environment (created by Vercel). Which casing reaches the
     # token is not documented, so both are accepted.
     terraform-apply = distinct([
-      "repo:${var.github_org}/${var.infra_repo}:environment:${var.github_environment}",
-      "repo:${var.github_org}/${var.infra_repo}:environment:${title(var.github_environment)}",
+      "${local.infra_subject}:environment:${var.github_environment}",
+      "${local.infra_subject}:environment:${title(var.github_environment)}",
     ])
     deploy = distinct([
-      "repo:${var.github_org}/${var.app_repo}:environment:${var.github_environment}",
-      "repo:${var.github_org}/${var.app_repo}:environment:${title(var.github_environment)}",
+      "${local.app_subject}:environment:${var.github_environment}",
+      "${local.app_subject}:environment:${title(var.github_environment)}",
       # .github/workflows/deploy-app.yml here (manual), through this repo's environment.
-      "repo:${var.github_org}/${var.infra_repo}:environment:${var.github_environment}",
-      "repo:${var.github_org}/${var.infra_repo}:environment:${title(var.github_environment)}",
+      "${local.infra_subject}:environment:${var.github_environment}",
+      "${local.infra_subject}:environment:${title(var.github_environment)}",
     ])
   }
 

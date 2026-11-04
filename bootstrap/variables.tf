@@ -28,6 +28,23 @@ variable "app_repo" {
   default = "ringee-app"
 }
 
+# Immutable GitHub ids that go into the OIDC subject (main.tf, locals). From
+# https://api.github.com/repos/ringee-io/<repo>: owner.id and id.
+variable "github_org_id" {
+  type    = string
+  default = "262492135"
+}
+
+variable "infra_repo_id" {
+  type    = string
+  default = "1445215484"
+}
+
+variable "app_repo_id" {
+  type    = string
+  default = "1174124985"
+}
+
 variable "github_branch" {
   description = "The branch that deploys to this account: main for prod, staging for staging."
   type        = string

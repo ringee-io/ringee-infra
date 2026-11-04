@@ -3,11 +3,16 @@
 # workspace, git-ignored) with a copy in the bucket it creates: see README,
 # "Bootstrap". Creates:
 # - the state bucket (versioned, encrypted, private, TLS only, native locking);
-# - GitHub's OIDC provider and three roles, so no AWS key ever lives in GitHub:
-#   terraform-plan  ringee-infra pull requests       read-only + state
-#   terraform-apply ringee-infra, <env> environment  administrator
-#   deploy          ringee-app, <env> environment    push to ECR, roll ECS
-#   The <env> GitHub environments must require a reviewer (AWS-22).
+# - GitHub's OIDC provider and two roles, so no AWS key ever lives in GitHub:
+#   terraform-plan  ringee-infra pull requests and pushes to <branch>  read-only + state
+#   deploy          ringee-app, <env> environment                      push to ECR, roll ECS
+#   In ringee-app (public) the <env> environment accepts only <branch> and
+#   production requires a reviewer (AWS-22).
+#
+# There is deliberately no apply role. ringee-infra is private, and below GitHub
+# Enterprise a private repository cannot make a job wait for a reviewer, so an
+# admin role trusted by GitHub could not be gated. Terraform is applied from a
+# workstation with an SSO session, after reading the plan.
 
 terraform {
   required_version = ">= 1.10"
@@ -130,9 +135,11 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 data "aws_iam_policy_document" "trust" {
   for_each = {
-    terraform-plan  = "repo:${var.github_org}/${var.infra_repo}:pull_request"
-    terraform-apply = "repo:${var.github_org}/${var.infra_repo}:environment:${var.github_environment}"
-    deploy          = "repo:${var.github_org}/${var.app_repo}:environment:${var.github_environment}"
+    terraform-plan = [
+      "repo:${var.github_org}/${var.infra_repo}:pull_request",
+      "repo:${var.github_org}/${var.infra_repo}:ref:refs/heads/${var.github_branch}",
+    ]
+    deploy = ["repo:${var.github_org}/${var.app_repo}:environment:${var.github_environment}"]
   }
 
   statement {
@@ -152,7 +159,7 @@ data "aws_iam_policy_document" "trust" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
-      values   = [each.value]
+      values   = each.value
     }
   }
 }
@@ -196,11 +203,6 @@ resource "aws_iam_role_policy" "plan_state" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "apply_admin" {
-  role       = aws_iam_role.github["terraform-apply"].name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
-}
-
 resource "aws_iam_role_policy" "deploy" {
   name = "push-images-and-roll-services"
   role = aws_iam_role.github["deploy"].id
@@ -228,6 +230,13 @@ resource "aws_iam_role_policy" "deploy" {
           "ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks",
           "ecs:ListTasks", "ecs:RegisterTaskDefinition",
         ]
+        Resource = "*"
+      },
+      {
+        # run-task needs the subnets and the ops security group; the workflow
+        # finds them by name instead of keeping ids in GitHub.
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeSubnets", "ec2:DescribeSecurityGroups"]
         Resource = "*"
       },
       {

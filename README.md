@@ -20,7 +20,7 @@ Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API)
 ## Cómo se reparte el trabajo
 
 - **Terraform** crea la infraestructura y la primera revisión de cada tarea.
-- **El workflow de deploy del repo de la app** (AWS-21, pendiente) construye las imágenes ARM64, las sube a ECR, corre `migrate` y actualiza los servicios. Terraform ignora la revisión que corre en `api`, `orchestrator` y `chatgpt-mcp`, así que un `apply` nunca deshace un deploy. Si Terraform cambia una variable o un tamaño, el cambio sale en el siguiente deploy.
+- **El workflow de deploy del repo de la app** (AWS-21, ver CI/CD) construye las imágenes ARM64, las sube a ECR, corre `migrate` y actualiza los servicios. Terraform ignora la revisión que corre en `api`, `orchestrator` y `chatgpt-mcp`, así que un `apply` nunca deshace un deploy. Si Terraform cambia una variable o un tamaño, el cambio sale en el siguiente deploy.
 - `temporal` y `temporal-ui` sí los despliega Terraform: subir la versión de Temporal es un `apply`, después de correr `temporal-schema`.
 
 ## Secretos
@@ -101,6 +101,25 @@ Requisitos: AWS-03 hecho (Organizations, `ringee-prod` y `ringee-staging`, IAM I
    Después, `running = true` en `terraform.tfvars` y `terraform apply`. Ese mismo apply crea las alarmas. Si el runbook pide `orchestrator` en 0 un rato más, bájalo igual que arriba.
 
 Hasta que AWS-06 (SSE por Redis) corra estable en Railway, deja `api_min_tasks = 1`.
+
+## CI/CD
+
+- **App → AWS** (`.github/workflows/deploy-aws.yml` en `ringee-app`): un push a `staging` despliega en la cuenta de staging y uno a `main` en la de prod, después de tu aprobación. Construye las imágenes en ARM64, las sube a ECR, corre `migrate` cuando `RUN_MIGRATIONS` es `true` (AWS-09), actualiza los servicios y hace un smoke test. Usa el rol `github-deploy`.
+- **Este repo** (`.github/workflows/terraform.yml`): `fmt`, `terraform test` y `plan` en cada PR y en cada push a `staging` o `main`, con el rol de solo lectura `github-terraform-plan`. **Nunca aplica.** Por debajo de GitHub Enterprise, un repo privado no puede hacer que un job espere a un revisor. El apply se hace desde tu Mac después de leer el plan:
+  ```bash
+  cd envs/staging
+  AWS_PROFILE=ringee-staging terraform init -backend-config=backend.hcl
+  AWS_PROFILE=ringee-staging terraform apply
+  ```
+
+En `ringee-app` (_Settings → Environments_):
+
+| Entorno      | Branches que acepta | Revisor                                   | Variables                                                                                                                                |
+| ------------ | ------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `staging`    | `staging`           | ninguno                                   | `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::699340623836:role/github-deploy`, `API_HOST` = `api.staging.ringee.io`, `RUN_MIGRATIONS` = `false` |
+| `production` | `main`              | tú, con _Prevent self-review_ desactivado | `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::405762675020:role/github-deploy`, `API_HOST` = `api.ringee.io`, `RUN_MIGRATIONS` = `false`         |
+
+La variable de repositorio `AWS_DEPLOY_ENVIRONMENTS` decide quién despliega: sin definir, nadie; `staging` cuando el staging esté arriba; `staging,production` la semana del corte. Mientras tanto Railway sigue desplegando `main`.
 
 ## Operación
 

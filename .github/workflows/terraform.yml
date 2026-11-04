@@ -1,0 +1,90 @@
+name: Terraform
+
+# Checks and plans; it never applies. A pull request into `staging` or `main`
+# plans that environment, and so does a push to either branch, so the plan of
+# what landed is always on record (job summary).
+#
+# Apply runs from a workstation with an SSO session (README): ringee-infra is
+# private, and below GitHub Enterprise a private repository cannot make a job
+# wait for a reviewer. The plan role (bootstrap/) is read-only.
+
+on:
+  pull_request:
+    branches: [main, staging]
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.base_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: 1.17.1
+  AWS_REGION: us-east-1
+
+jobs:
+  test:
+    name: Format and module tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform fmt -check -recursive
+      - run: terraform -chdir=modules/stack init -backend=false -input=false
+      - run: terraform -chdir=modules/stack test
+
+  plan:
+    name: Plan
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - id: target
+        env:
+          BRANCH: ${{ github.base_ref || github.ref_name }}
+        run: |
+          case "$BRANCH" in
+            main) stack=prod; account=405762675020 ;;
+            staging) stack=staging; account=699340623836 ;;
+            *) echo "::error::$BRANCH has no environment"; exit 1 ;;
+          esac
+          echo "stack=$stack" >> "$GITHUB_OUTPUT"
+          echo "account=$account" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ steps.target.outputs.account }}:role/github-terraform-plan
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Plan ${{ steps.target.outputs.stack }}
+        env:
+          STACK: ${{ steps.target.outputs.stack }}
+          ACCOUNT: ${{ steps.target.outputs.account }}
+        run: |
+          set -o pipefail
+          terraform -chdir="envs/$STACK" init -input=false \
+            -backend-config="bucket=ringee-tfstate-$ACCOUNT" \
+            -backend-config="key=$STACK/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          terraform -chdir="envs/$STACK" plan -input=false -lock-timeout=5m -no-color | tee plan.txt
+          {
+            echo "### Plan for $STACK"
+            echo '```'
+            grep -E '^(Plan:|No changes|  # )' plan.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

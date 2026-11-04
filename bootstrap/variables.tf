@@ -28,7 +28,12 @@ variable "app_repo" {
   default = "ringee-app"
 }
 
+variable "github_branch" {
+  description = "The branch that deploys to this account: main for prod, staging for staging."
+  type        = string
+}
+
 variable "github_environment" {
-  description = "GitHub environment whose jobs may assume the apply and deploy roles."
+  description = "ringee-app environment whose jobs may assume the deploy role."
   type        = string
 }

@@ -2,6 +2,11 @@
 """Give staging's empty `ringee` database production's schema, without data.
 
   AWS_PROFILE=ringee-staging scripts/staging-schema.py --expect-account 699340623836
+  AWS_PROFILE=ringee-prod scripts/staging-schema.py --env prod --expect-account 405762675020
+
+With --env prod it does the same for prod's RDS, for a smoke test on api2
+before the cutover; empty it afterwards with `prod-data.py wipe`, because the
+cutover's restore only loads into an empty database.
 
 An interim step until the migrations are in git (AWS-09): it copies the tables,
 indexes (including the ones applied by hand that `prisma db push` would miss)
@@ -87,7 +92,8 @@ def pg_dump(url: str, *args: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--expect-account", required=True, help="the ringee-staging account id")
+    parser.add_argument("--expect-account", required=True, help="the account id of --env")
+    parser.add_argument("--env", choices=["staging", "prod"], default="staging", help="the stack to load (default: staging)")
     args = parser.parse_args()
 
     module = railway_env()
@@ -122,7 +128,7 @@ def main() -> None:
     print("extensions: " + (" ".join(extensions) or "none") + (f" (dropped: {' '.join(sorted(set(dropped)))})" if dropped else ""))
 
     outputs = json.loads(subprocess.run(
-        ["terraform", f"-chdir={ROOT / 'envs' / 'staging'}", "output", "-json", "stack"],
+        ["terraform", f"-chdir={ROOT / 'envs' / args.env}", "output", "-json", "stack"],
         capture_output=True, text=True, check=True,
     ).stdout)
     key = "schema/production-schema-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".sql"
@@ -136,7 +142,7 @@ def main() -> None:
         f"aws s3 cp \"s3://$OPS_BUCKET/{key}\" - | psql -v ON_ERROR_STOP=1 --single-transaction --quiet \"$PG_URL_APP\"; "
         "echo \"loaded: $(psql \"$PG_URL_APP\" -tAc \"select count(*) from pg_tables where schemaname = 'public'\") tables\""
     )
-    result = subprocess.run([str(ROOT / "scripts" / "run-task.sh"), "staging", "ops", "--", "sh", "-c", load])
+    result = subprocess.run([str(ROOT / "scripts" / "run-task.sh"), args.env, "ops", "--", "sh", "-c", load])
     sys.exit(result.returncode)
 
 

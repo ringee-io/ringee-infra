@@ -227,12 +227,18 @@ Ese primer apply destapó lo que los proveedores simulados no ven, ya corregido:
 - Los secretos copiados de Railway (`railway-env.py --apply`: 108 compartidos, 1 de la API y 16 de chatgpt-mcp).
 - Las tareas `db-bootstrap` y `temporal-schema`, y el namespace `default`: Temporal subió a 1 tarea para registrarlo y volvió a 0.
 
-`api2.ringee.io` apunta al ALB y responde 503 hasta que haya tareas. `github-deploy` acepta `production`/`Production` de ringee-app, y los dos repos tienen su entorno `production` (solo `main`, con revisor). La cuenta era nueva: antes del `apply` hubo que crear los roles de servicio de ECS y ElastiCache.
+`api2.ringee.io` apunta al ALB. `github-deploy` acepta `production`/`Production` de ringee-app, y los dos repos tienen su entorno `production` (solo `main`, con revisor). La cuenta era nueva: antes del `apply` hubo que crear los roles de servicio de ECS y ElastiCache.
+
+_Deploy app_ (desde `main`, con `app_ref=staging`) subió las imágenes `1611b385`, que no son las del corte: esas se construyen desde el commit que corra Railway en T−48 h. Ese commit tiene que traer también AWS-06, AWS-07 y AWS-33.
+
+Prueba de humo, el mismo día:
+
+- Cargué el esquema de producción sin datos (`staging-schema.py --env prod`) y encendí Temporal y 1 tarea de API.
+- `https://api2.ringee.io/api/health` respondió 200 en 0.3 s. El arranque no dejó ningún error ni aviso, y las rutas protegidas devolvieron 401 sin token.
+- Después lo bajé todo a 0, y `prod-data.py wipe` dejó RDS vacía; así ese paso quedó probado también en AWS.
 
 Falta:
 
-- las imágenes de la app en prod (_Deploy app_ desde `main`);
-- una prueba de humo en `api2` con el esquema sin datos;
 - el ensayo (AWS-24) y el corte (AWS-26);
 - la imagen ARM64 de `chatgpt-mcp` (AWS-10, hoy pesa 1 GB);
 - las migraciones en git (AWS-09);

@@ -92,7 +92,7 @@ resource "aws_lb_listener_rule" "host" {
 
   condition {
     host_header {
-      values = [each.value.host]
+      values = each.value.hosts
     }
   }
 }

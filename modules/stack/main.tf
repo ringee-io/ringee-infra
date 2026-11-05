@@ -161,11 +161,11 @@ module "alb" {
   vpc_id              = module.network.vpc_id
   subnet_ids          = module.network.public_subnet_ids
   security_group_id   = module.security.ids["alb"]
-  certificate_domains = [var.api_host, var.chatgpt_host]
+  certificate_domains = concat([var.api_host, var.chatgpt_host], var.api_aliases)
   deletion_protection = var.alb_deletion_protection
   routes = {
-    api     = { host = var.api_host, port = 3000, health_check_path = "/api/health", priority = 10 }
-    chatgpt = { host = var.chatgpt_host, port = 4250, health_check_path = "/health", priority = 20 }
+    api     = { hosts = concat([var.api_host], var.api_aliases), port = 3000, health_check_path = "/api/health", priority = 10 }
+    chatgpt = { hosts = [var.chatgpt_host], port = 4250, health_check_path = "/health", priority = 20 }
   }
 }
 
@@ -471,8 +471,19 @@ module "ops" {
     Statement = [
       { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "${aws_s3_bucket.ops.arn}/*" },
       { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.ops.arn },
+      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.cutover_source.arn },
     ]
   })
+}
+
+# Railway's database URL while scripts/prod-data.py copies the database (plan
+# §10 step 8). The script writes it right before the dump and overwrites it
+# right after; the ops task reads it at run time, so the URL is never in a task
+# definition, an override or CloudTrail. Terraform never sets its value.
+resource "aws_secretsmanager_secret" "cutover_source" {
+  name                    = "ringee/${var.env}/cutover-source"
+  description             = "Railway's database URL during a copy by scripts/prod-data.py; a placeholder otherwise."
+  recovery_window_in_days = 0
 }
 
 # ── Ops bucket ───────────────────────────────────────────────────────────────

@@ -66,3 +66,8 @@ output "mirror_images" {
 output "ops_bucket" {
   value = aws_s3_bucket.ops.bucket
 }
+
+output "cutover_source_secret" {
+  description = "Filled by scripts/prod-data.py with Railway's database URL while it copies the database."
+  value       = aws_secretsmanager_secret.cutover_source.name
+}

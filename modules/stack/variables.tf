@@ -20,6 +20,12 @@ variable "chatgpt_host" {
   type = string
 }
 
+variable "api_aliases" {
+  description = "More hostnames for the API: same target group, and in the certificate. Prod serves api2.ringee.io while api.ringee.io still points at Railway."
+  type        = list(string)
+  default     = []
+}
+
 variable "running" {
   description = "False keeps every service at 0 tasks (before secrets, images and schemas exist, and until cutover night)."
   type        = bool

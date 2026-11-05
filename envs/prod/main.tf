@@ -37,7 +37,11 @@ module "stack" {
   cidr         = "10.40.0.0/16"
   api_host     = "api.ringee.io"
   chatgpt_host = "chatgpt.ringee.io"
-  running      = var.running
+  # api2.ringee.io reaches this stack before the cutover, while api.ringee.io
+  # and chatgpt.ringee.io still point at Railway. The certificate already covers
+  # those two, so the cutover only changes DNS.
+  api_aliases = ["api2.ringee.io"]
+  running     = var.running
 
   # Tier B, decided 2026-11-04: Multi-AZ database and two API tasks; Valkey
   # with a single node. No read replicas.

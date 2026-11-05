@@ -50,8 +50,10 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           APP_REF: ${{ inputs.app_ref }}
         run: |
+          # The smoke test goes through api2.ringee.io, which always reaches
+          # AWS: api.ringee.io points at Railway until the cutover.
           case "$BRANCH" in
-            main) stack=prod; account=405762675020; environment=production; api_host=api.ringee.io ;;
+            main) stack=prod; account=405762675020; environment=production; api_host=api2.ringee.io ;;
             staging) stack=staging; account=699340623836; environment=staging; api_host=api.staging.ringee.io ;;
             *) echo "::error::Run this workflow from staging or main, not $BRANCH"; exit 1 ;;
           esac

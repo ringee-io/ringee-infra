@@ -2,7 +2,7 @@
 
 Infraestructura de Ringee en AWS con Terraform. El plan completo, con costos y decisiones, está en `docs/product/PLAN_MIGRACION_AWS.md` del repo de la app. Los IDs `AWS-xx` vienen de ahí.
 
-Este repo es **privado**. Nunca lo publiques ni copies nada de aquí al repo de la app, que es público.
+Este repo es **público** desde el 4 de noviembre de 2026, para que GitHub Free aplique las reglas de los entornos. Nunca guardes aquí secretos, estado ni planes de Terraform.
 
 ## Qué hay
 
@@ -13,7 +13,7 @@ Este repo es **privado**. Nunca lo publiques ni copies nada de aquí al repo de 
 | `modules/stack`             | El entorno completo: red, RDS, Valkey, ALB, ECS, secretos, alarmas y horario de staging.                                                                              |
 | `modules/*`                 | Las piezas: `network`, `security` (la matriz de acceso de §4.3), `ecr`, `rds`, `valkey`, `alb`, `ecs-cluster`, `ecs-service`, `secrets`, `observability`, `schedule`. |
 | `config/secret-keys.json`   | **Solo nombres** de las variables copiadas de Railway, por ámbito. Lo genera `scripts/railway-env.py`.                                                                |
-| `scripts/`                  | `railway-env.py` (AWS-18), `run-task.sh`, `mirror-images.sh` y `staging-power.sh`.                                                                                    |
+| `scripts/`                  | `railway-env.py` (AWS-18), `prod-data.py` y `data/` (copia de la base, AWS-24), `run-task.sh`, `mirror-images.sh` y `staging-power.sh`.                               |
 
 Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API) con **un solo nodo de Valkey**, y **sin réplicas de lectura**. Staging durante al menos 6 meses, encendido de lunes a viernes de 08:00 a 22:00 (hora de RD).
 
@@ -33,6 +33,13 @@ Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API)
 ## Orden de arranque
 
 Requisitos: AWS-03 hecho (Organizations, `ringee-prod` y `ringee-staging`, IAM Identity Center), `aws configure sso` con un perfil por cuenta, y Terraform 1.10 o más nuevo. Cada paso se hace primero en staging.
+
+En una cuenta nueva, crea antes los roles de servicio de ECS y ElastiCache; si no, el primer `apply` puede fallar mientras se propagan:
+
+```bash
+aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com
+aws iam create-service-linked-role --aws-service-name elasticache.amazonaws.com
+```
 
 1. **Bootstrap**, una vez por cuenta, en el workspace del mismo nombre:
 
@@ -61,6 +68,8 @@ Requisitos: AWS-03 hecho (Organizations, `ringee-prod` y `ringee-staging`, IAM I
    ```
 
    Crea esos CNAME en Cloudflare **solo DNS (nube gris)** y espera a que ACM diga _Issued_ (unos minutos).
+
+   En prod, el certificado cubre `api.ringee.io`, `chatgpt.ringee.io` y `api2.ringee.io` (`api_aliases`). Los CNAME de validación no tocan esos nombres. `api2.ringee.io` apunta al ALB desde ya (CNAME en gris, a `alb_dns_name`) y sirve para probar AWS antes del corte. `api` y `chatgpt` siguen en Railway hasta el paso 12 de §10, y ese día solo cambia su DNS. Hasta entonces nadie hace login por `api2`: un usuario de Clerk sin `privateMetadata.userId` quedaría ligado a la base de AWS.
 
 4. **Todo lo demás**, con los servicios en 0 tareas (`running = false`, el valor por defecto):
 
@@ -144,7 +153,7 @@ En `ringee-app` (_Settings → Environments_):
 | Entorno      | Branches que acepta | Revisor                                   | Variables                                                                                                                                |
 | ------------ | ------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `staging`    | `staging`           | ninguno                                   | `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::699340623836:role/github-deploy`, `API_HOST` = `api.staging.ringee.io`, `RUN_MIGRATIONS` = `false` |
-| `production` | `main`              | tú, con _Prevent self-review_ desactivado | `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::405762675020:role/github-deploy`, `API_HOST` = `api.ringee.io`, `RUN_MIGRATIONS` = `false`         |
+| `production` | `main`              | tú, con _Prevent self-review_ desactivado | `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::405762675020:role/github-deploy`, `API_HOST` = `api2.ringee.io`, `RUN_MIGRATIONS` = `false`        |
 
 La variable de repositorio `AWS_DEPLOY_ENVIRONMENTS` decide quién despliega: sin definir, nadie; `staging` cuando el staging esté arriba; `staging,production` la semana del corte. Mientras tanto Railway sigue desplegando `main`.
 
@@ -157,9 +166,33 @@ En `ringee-infra` (_Settings → Environments_), sin variables:
 
 La variable de repositorio `TF_APPLY_ENVIRONMENTS` hace lo mismo para Terraform: sin definir, el CI solo planifica. Se define después del primer apply de cada entorno. Además, en _Settings → Actions → General_, elige _Require approval for all external contributors_ en los workflows de PRs de forks.
 
+## Copia de la base de producción (AWS-24, §10 pasos 8 y 9)
+
+`scripts/prod-data.py` copia la base de Railway a RDS con la tarea `ops`. `pg_dump` corre en AWS, así que los datos no pasan por ninguna máquina, y el dump queda cifrado 30 días en el bucket de ops como punto de rollback. De Railway solo lee la URL de la base, que pasa por el secreto `ringee/prod/cutover-source` mientras dura el dump y se sobrescribe al terminar, y corre `pg_dump`.
+
+- **Ensayo** (T−7 días), con todos los servicios en 0:
+
+  ```bash
+  AWS_PROFILE=ringee-prod scripts/prod-data.py copy --mode rehearsal --expect-account 405762675020
+  ```
+
+  Hace dump, restore y verify, imprime los tiempos y al final vacía RDS. Ningún servicio arranca sobre la copia: con las credenciales reales y Railway vivo, el dialer de la API y los schedules del orchestrator llamarían dos veces a los mismos leads. Para revisar la copia, `--keep`, y después `prod-data.py wipe --expect-account 405762675020 --confirm ringee-prod`.
+
+- **Noche del corte** (§10 paso 8), con Api y Orchestrator de Railway detenidos y RDS vacía:
+
+  ```bash
+  AWS_PROFILE=ringee-prod scripts/prod-data.py copy --mode cutover --expect-account 405762675020
+  ```
+
+  Falla si queda otra sesión conectada a la base de Railway (`--allow-sessions` si sabes que no escribe) o si algo cambió durante el dump. Aquí `verify` exige que RDS coincida exactamente.
+
+- `verify` compara el número de filas de cada tabla, las secuencias, un hash de `_prisma_migrations` y el número de tablas, índices, constraints, enums, funciones, triggers y vistas. Solo nombres y números: ningún dato de clientes llega a los logs. En el ensayo, una tabla que cambió durante el dump tiene que quedar entre sus dos cifras.
+- `restore`, `copy` y `wipe` se niegan si `api` u `orchestrator` corren en prod o si `api.ringee.io` ya apunta al ALB. `restore` nunca carga encima de tablas.
+- Probado el 5 de noviembre de 2026 contra un Postgres 17 local con el esquema de producción (sin datos de clientes) y filas sintéticas: 144 de 144 cifras idénticas, y saltan los tres frenos (sesiones abiertas, destino con tablas y cifras fuera de rango).
+
 ## Operación
 
-- **Una tarea puntual:** `scripts/run-task.sh <env> ops -- sh -c 'psql "$PG_URL_APP" -c "select 1"'`.
+- **Una tarea puntual:** `scripts/run-task.sh <env> ops -- sh -c 'psql "$PG_URL_APP" -c "select 1"'`. Espera 10 minutos y después la detiene; `RUN_TASK_TIMEOUT_MINUTES` da más.
 - **Entrar a un contenedor:** `aws ecs execute-command --cluster ringee-prod --task <id> --container api --interactive --command sh`.
 - **Temporal UI** (sin dominio público): sube `temporal-ui` a 1 tarea y abre un túnel de SSM.
   ```bash
@@ -187,4 +220,20 @@ Ese primer apply destapó lo que los proveedores simulados no ven, ya corregido:
 - En una cuenta nueva, el primer `CreateReplicationGroup` puede fallar con `InvalidCredentialsException` mientras se propaga el rol de servicio de ElastiCache. Basta con reintentar.
 - El formato del `sub` de los tokens OIDC de GitHub depende del repositorio. ringee-infra firma con IDs inmutables (`repo:ringee-io@262492135/ringee-infra@<id>:…`), y su forma simple se rechaza. ringee-app firma con la forma simple (`repo:ringee-io/ringee-app:…`), como mostró CloudTrail en el primer push a `staging`. `github-deploy` acepta las dos formas para ringee-app. El `sub` real aparece en el evento `AssumeRoleWithWebIdentity` de CloudTrail, en `userIdentity.userName`.
 
-Falta: la imagen ARM64 de `chatgpt-mcp` (AWS-10, hoy pesa 1 GB), las migraciones en git (AWS-09), las credenciales de prueba de staging (hoy son falsas) y el runbook del corte (AWS-24, AWS-26).
+**Producción en AWS, 5 de noviembre de 2026.** El stack completo está creado (168 recursos) con todos los servicios en 0 tareas:
+
+- Red, RDS PostgreSQL 17 Multi-AZ, Valkey, ECS y ECR con las imágenes de terceros.
+- El ALB, con un certificado para `api`, `chatgpt` y `api2`.
+- Los secretos copiados de Railway (`railway-env.py --apply`: 108 compartidos, 1 de la API y 16 de chatgpt-mcp).
+- Las tareas `db-bootstrap` y `temporal-schema`, y el namespace `default`: Temporal subió a 1 tarea para registrarlo y volvió a 0.
+
+`api2.ringee.io` apunta al ALB y responde 503 hasta que haya tareas. `github-deploy` acepta `production`/`Production` de ringee-app, y los dos repos tienen su entorno `production` (solo `main`, con revisor). La cuenta era nueva: antes del `apply` hubo que crear los roles de servicio de ECS y ElastiCache.
+
+Falta:
+
+- las imágenes de la app en prod (_Deploy app_ desde `main`);
+- una prueba de humo en `api2` con el esquema sin datos;
+- el ensayo (AWS-24) y el corte (AWS-26);
+- la imagen ARM64 de `chatgpt-mcp` (AWS-10, hoy pesa 1 GB);
+- las migraciones en git (AWS-09);
+- las credenciales de prueba de staging que siguen falsas.

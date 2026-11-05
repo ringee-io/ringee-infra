@@ -21,12 +21,19 @@ variable "certificate_domains" {
 }
 
 variable "routes" {
+  description = "One target group per route; a route answers on each of its hosts."
   type = map(object({
-    host              = string
+    hosts             = list(string)
     port              = number
     health_check_path = string
     priority          = number
   }))
+
+  validation {
+    # An ALB rule takes at most 5 values per condition.
+    condition     = alltrue([for route in values(var.routes) : length(route.hosts) >= 1 && length(route.hosts) <= 5])
+    error_message = "Each route needs between 1 and 5 hosts."
+  }
 }
 
 variable "idle_timeout" {

@@ -186,6 +186,10 @@ La variable de repositorio `TF_APPLY_ENVIRONMENTS` hace lo mismo para Terraform:
 
   Falla si queda otra sesión conectada a la base de Railway (`--allow-sessions` si sabes que no escribe) o si algo cambió durante el dump. Aquí `verify` exige que RDS coincida exactamente.
 
+  Si el DNS de `api.ringee.io` ya se cambió antes de la copia, añade `--dns-switched-early`. Solo vale con `copy --mode cutover`: sigue negándose si `api` u `orchestrator` corren, y la tarea sigue rechazando una RDS que tenga tablas.
+
+- **Índices inválidos:** `pg_dump` no copia los índices que en el origen quedaron inválidos, por ejemplo un `CREATE INDEX CONCURRENTLY` que falló. Si es así, `verify` falla con `objects indexes` (el origen tiene más). Búscalos en Railway con `pg_index.indisvalid = false` y créalos en RDS con su `pg_get_indexdef` antes de arrancar la API. Después compara el md5 de `indexname || ':' || indexdef` en las dos bases y vuelve a correr `prod-data.py verify --key <la del corte>`.
+
 - `verify` compara el número de filas de cada tabla, las secuencias, un hash de `_prisma_migrations` y el número de tablas, índices, constraints, enums, funciones, triggers y vistas. Solo nombres y números: ningún dato de clientes llega a los logs. En el ensayo, una tabla que cambió durante el dump tiene que quedar entre sus dos cifras.
 - `restore`, `copy` y `wipe` se niegan si `api` u `orchestrator` corren en prod o si `api.ringee.io` ya apunta al ALB. `restore` nunca carga encima de tablas.
 - Probado el 5 de noviembre de 2026 contra un Postgres 17 local con el esquema de producción (sin datos de clientes) y filas sintéticas: 144 de 144 cifras idénticas, y saltan los tres frenos (sesiones abiertas, destino con tablas y cifras fuera de rango).
@@ -237,9 +241,18 @@ Prueba de humo, el mismo día:
 - `https://api2.ringee.io/api/health` respondió 200 en 0.3 s. El arranque no dejó ningún error ni aviso, y las rutas protegidas devolvieron 401 sin token.
 - Después lo bajé todo a 0, y `prod-data.py wipe` dejó RDS vacía; así ese paso quedó probado también en AWS.
 
+**Corte, 7 de noviembre de 2026.**
+
+- Edison detuvo Api, Orchestrator y chatgpt-mcp en Railway (sin GitHub desde el 5) y apuntó `api` y `chatgpt` al ALB antes de la copia.
+- `prod-data.py copy --mode cutover --dns-switched-early`:
+  - el dump no encontró ninguna sesión en Railway: 133 tablas y 794.753 filas, 137 MB comprimidos, 17 s de `pg_dump`;
+  - restore tardó 24 s;
+  - `verify` falló solo en `objects indexes` (677 contra 675). En Railway, `Call_dispositionId_idx` y `CallbackTask_agentCallbackKey_key` eran inválidos. Se crearon en RDS con la misma definición, y la huella de los 677 índices quedó idéntica. Después `verify` dio 144 de 144.
+- Temporal, la API (`b8031b6d`), `orchestrator` y `chatgpt-mcp` arriba con `running = true`. Están activos las alarmas y el health check de `api.ringee.io` (`health_check_fqdn`).
+
 Falta:
 
-- el ensayo (AWS-24) y el corte (AWS-26);
+- lo de después del corte: los servicios de Railway (AWS-27, en manos de Edison, incluido Temporal con su UI pública), cruzar con Telnyx las llamadas de la ventana (AWS-28) y conservar la base de Railway 14 días (AWS-29);
 - la imagen ARM64 de `chatgpt-mcp` (AWS-10, hoy pesa 1 GB);
 - las migraciones en git (AWS-09);
 - las credenciales de prueba de staging que siguen falsas.

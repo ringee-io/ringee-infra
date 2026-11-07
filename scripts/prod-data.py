@@ -100,13 +100,19 @@ def points_here(outputs: dict) -> bool:
     return canonical.lower().rstrip(".") == alb or bool(set(prod_ips) & set(alb_ips))
 
 
-def guard_target(outputs: dict, action: str) -> None:
+def guard_target(outputs: dict, action: str, dns_switched_early: bool = False) -> None:
     busy = running_services(outputs)
     if busy:
         sys.exit(f"Refusing to {action}: {', '.join(busy)} run on ringee-{ENV}. On cutover night they start "
                  "after the copy (plan §10 step 10).")
     if points_here(outputs):
-        sys.exit(f"Refusing to {action}: {PROD_HOST} already points at this stack, so RDS is production now.")
+        if not dns_switched_early:
+            sys.exit(f"Refusing to {action}: {PROD_HOST} already points at this stack, so RDS is production now.")
+        # The DNS moved before the copy: with api and orchestrator at 0 nothing
+        # can have written to RDS, and dump.sh/restore.sh still refuse a target
+        # that has tables.
+        print(f"{action}: {PROD_HOST} already points at this stack (--dns-switched-early); going ahead because "
+              "api and orchestrator are at 0 and the task refuses an RDS that has tables.", flush=True)
 
 
 def run_step(outputs: dict, step: str, key: str, mode: str, timeout_minutes: int, **flags: str) -> bool:
@@ -171,10 +177,15 @@ def main() -> None:
     parser.add_argument("--confirm", help="wipe: must be ringee-prod")
     parser.add_argument("--keep", action="store_true",
                         help="copy --mode rehearsal: leave the copy in RDS (wipe it yourself before any service starts)")
+    parser.add_argument("--dns-switched-early", action="store_true",
+                        help="copy --mode cutover: api.ringee.io was pointed at this stack before the copy. Still "
+                             "refuses while api or orchestrator run, and the task still refuses an RDS with tables")
     args = parser.parse_args()
 
     if args.step in ("dump", "copy") and not args.mode:
         parser.error(f"{args.step} needs --mode rehearsal or --mode cutover")
+    if args.dns_switched_early and not (args.step == "copy" and args.mode == "cutover"):
+        parser.error("--dns-switched-early only applies to copy --mode cutover")
     check_account(args.expect_account)
     outputs = stack_outputs()
 
@@ -187,7 +198,7 @@ def main() -> None:
             sys.exit(0 if run_step(outputs, "restore", key, mode_of(key), 60) else 1)
         sys.exit(0 if run_step(outputs, "verify", key, mode_of(key), 30) else 1)
     elif args.step == "copy":
-        guard_target(outputs, "restore")
+        guard_target(outputs, "restore", dns_switched_early=args.dns_switched_early)
         started = time.monotonic()
         key = dump(outputs, args.mode, args.allow_sessions, empty_target=True)
         if not run_step(outputs, "restore", key, args.mode, 60):

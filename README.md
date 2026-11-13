@@ -12,7 +12,7 @@ Este repo es **público** desde el 4 de noviembre de 2026, para que GitHub Free 
 | `envs/prod`, `envs/staging` | Las dos raíces. Solo cambian tamaños y opciones; todo lo demás está en `modules/stack`.                                                                               |
 | `modules/stack`             | El entorno completo: red, RDS, Valkey, ALB, ECS, secretos, alarmas y horario de staging.                                                                              |
 | `modules/*`                 | Las piezas: `network`, `security` (la matriz de acceso de §4.3), `ecr`, `rds`, `valkey`, `alb`, `ecs-cluster`, `ecs-service`, `secrets`, `observability`, `schedule`. |
-| `config/secret-keys.json`   | **Solo nombres** de las variables copiadas de Railway, por ámbito. Lo genera `scripts/railway-env.py`.                                                                |
+| `config/secret-keys.json`   | **Solo nombres** de las variables de las apps, por ámbito. Lo generó `scripts/railway-env.py`; las nuevas se agregan a mano (ver Secretos).                           |
 | `scripts/`                  | `railway-env.py` (AWS-18), `prod-data.py` y `data/` (copia de la base, AWS-24), `run-task.sh`, `mirror-images.sh`, `staging-power.sh` y `db-tunnel.sh`.               |
 
 Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API) con **un solo nodo de Valkey**, y **sin réplicas de lectura**. Staging durante al menos 6 meses, encendido de lunes a viernes de 08:00 a 22:00 (hora de RD).
@@ -26,6 +26,7 @@ Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API)
 ## Secretos
 
 - `ringee/<env>/shared`, `/api`, `/orchestrator` y `/chatgpt-mcp`: las variables de Railway. Las escribe `scripts/railway-env.py`; Terraform crea el contenedor y nunca lee ni escribe el valor.
+- **Una variable nueva**, desde que producción salió de Railway, se agrega a mano. Pon el nombre en `config/secret-keys.json` y el valor en `ringee/<env>/<ámbito>` **en los dos entornos**: ambos leen la misma lista, y ECS no arranca una tarea cuyo secreto no trae una de sus claves. En staging, anótala también en `staging.env`. Después corre `terraform apply` en cada entorno, que solo reemplaza las definiciones de tarea, y la variable entra con el siguiente deploy.
 - `ringee/<env>/generated`: lo que crea este stack (contraseñas de los roles `ringee_app` y `temporal`, el token de Valkey y las URLs armadas con ellos). Está en el state, que por eso vive en un bucket privado, cifrado y con versiones.
 - `ringee/<env>/editor`: usuario y contraseña de `ringee_editor`, el rol para personas (ver "Base de datos desde DBeaver"). Lo crea este stack y ninguna app lo lee. Va aparte de `generated` para que leerlo no entregue las credenciales de las apps y para que cambiarlo no toque sus tareas.
 - La contraseña maestra de RDS la guarda RDS en su propio secreto y la rota él. Solo la usa la tarea `db-bootstrap`; las apps nunca.

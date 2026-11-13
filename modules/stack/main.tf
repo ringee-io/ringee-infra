@@ -117,6 +117,13 @@ resource "random_password" "db_temporal" {
   special = false
 }
 
+# The role for people (DBeaver through scripts/db-tunnel.sh), also created by
+# db-bootstrap. No app uses it.
+resource "random_password" "db_editor" {
+  length  = 40
+  special = false
+}
+
 locals {
   app_db = "postgresql://ringee_app:${random_password.db_app.result}@${module.rds.address}:5432/ringee"
   # Prisma reads connection_limit/pool_timeout; libpq (pg_dump, psql) rejects
@@ -138,6 +145,10 @@ module "secrets" {
     APP_DB_PASSWORD           = random_password.db_app.result
     TEMPORAL_DB_PASSWORD      = random_password.db_temporal.result
     REDIS_URL                 = "rediss://:${module.valkey.auth_token}@${module.valkey.primary_endpoint}:6379"
+  }
+  editor = {
+    username = "ringee_editor"
+    password = random_password.db_editor.result
   }
 }
 
@@ -393,7 +404,7 @@ module "db_bootstrap" {
   deployed_by_pipeline = false
 
   # Creates the roles and the three databases, and re-applies the passwords
-  # from the generated secret. Safe to run again at any time.
+  # from the generated and editor secrets. Safe to run again at any time.
   image   = local.images.postgres
   cpu     = 256
   memory  = 512
@@ -410,6 +421,7 @@ module "db_bootstrap" {
     PGPASSWORD           = "${local.master}:password::"
     APP_DB_PASSWORD      = "${local.generated}:APP_DB_PASSWORD::"
     TEMPORAL_DB_PASSWORD = "${local.generated}:TEMPORAL_DB_PASSWORD::"
+    EDITOR_DB_PASSWORD   = "${module.secrets.editor_secret_arn}:password::"
   }
 }
 

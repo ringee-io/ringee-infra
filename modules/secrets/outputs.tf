@@ -6,3 +6,7 @@ output "generated_secret_arn" {
   # Depend on the version so no task definition references an empty secret.
   value = aws_secretsmanager_secret_version.generated.secret_arn
 }
+
+output "editor_secret_arn" {
+  value = aws_secretsmanager_secret_version.editor.secret_arn
+}

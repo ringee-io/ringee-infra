@@ -13,7 +13,7 @@ Este repo es **público** desde el 4 de noviembre de 2026, para que GitHub Free 
 | `modules/stack`             | El entorno completo: red, RDS, Valkey, ALB, ECS, secretos, alarmas y horario de staging.                                                                              |
 | `modules/*`                 | Las piezas: `network`, `security` (la matriz de acceso de §4.3), `ecr`, `rds`, `valkey`, `alb`, `ecs-cluster`, `ecs-service`, `secrets`, `observability`, `schedule`. |
 | `config/secret-keys.json`   | **Solo nombres** de las variables copiadas de Railway, por ámbito. Lo genera `scripts/railway-env.py`.                                                                |
-| `scripts/`                  | `railway-env.py` (AWS-18), `prod-data.py` y `data/` (copia de la base, AWS-24), `run-task.sh`, `mirror-images.sh` y `staging-power.sh`.                               |
+| `scripts/`                  | `railway-env.py` (AWS-18), `prod-data.py` y `data/` (copia de la base, AWS-24), `run-task.sh`, `mirror-images.sh`, `staging-power.sh` y `db-tunnel.sh`.               |
 
 Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API) con **un solo nodo de Valkey**, y **sin réplicas de lectura**. Staging durante al menos 6 meses, encendido de lunes a viernes de 08:00 a 22:00 (hora de RD).
 
@@ -27,6 +27,7 @@ Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API)
 
 - `ringee/<env>/shared`, `/api`, `/orchestrator` y `/chatgpt-mcp`: las variables de Railway. Las escribe `scripts/railway-env.py`; Terraform crea el contenedor y nunca lee ni escribe el valor.
 - `ringee/<env>/generated`: lo que crea este stack (contraseñas de los roles `ringee_app` y `temporal`, el token de Valkey y las URLs armadas con ellos). Está en el state, que por eso vive en un bucket privado, cifrado y con versiones.
+- `ringee/<env>/editor`: usuario y contraseña de `ringee_editor`, el rol para personas (ver "Base de datos desde DBeaver"). Lo crea este stack y ninguna app lo lee. Va aparte de `generated` para que leerlo no entregue las credenciales de las apps y para que cambiarlo no toque sus tareas.
 - La contraseña maestra de RDS la guarda RDS en su propio secreto y la rota él. Solo la usa la tarea `db-bootstrap`; las apps nunca.
 - **Staging nunca lleva credenciales de producción.** Desde el 4 de noviembre de 2026 arranca con valores falsos para Clerk, Resend y los demás servicios de terceros: la infraestructura y la configuración son reales, pero no hay login, llamadas, correos ni IA. Las de prueba vendrán después: su propia cuenta de Telnyx, Stripe en modo test y un Clerk solo para staging, ni el de prod ni el que se usa en local, porque el `privateMetadata.userId` de cada usuario de Clerk apunta a una sola base y la API lo reescribe en el primer login. `railway-env.py` se niega a escribir fuera de producción.
 
@@ -94,7 +95,7 @@ aws iam create-service-linked-role --aws-service-name elasticache.amazonaws.com
 7. **Bases de datos y Temporal:**
 
    ```bash
-   scripts/run-task.sh prod db-bootstrap       # roles y las tres bases
+   scripts/run-task.sh prod db-bootstrap       # roles (ringee_app, temporal, ringee_editor) y las tres bases
    scripts/run-task.sh prod temporal-schema    # esquemas de Temporal
    ```
 
@@ -209,6 +210,38 @@ La variable de repositorio `TF_APPLY_ENVIRONMENTS` hace lo mismo para Terraform:
   ```
   Abre `http://localhost:8080` y vuelve a 0 al terminar.
 - **Staging fuera de horario:** `AWS_PROFILE=ringee-staging scripts/staging-power.sh on` (y `off`). Un `terraform apply` de noche lo vuelve a encender hasta las 22:00 del día siguiente laborable.
+
+## Base de datos desde DBeaver
+
+RDS no tiene dirección pública. `scripts/db-tunnel.sh` abre un túnel de Session Manager desde tu Mac hasta ella: pasa por una tarea pequeña en el grupo de seguridad `ops`, que RDS admite, sin SSH y sin abrir nada a internet.
+
+Una vez: `brew install --cask session-manager-plugin`. Cada día: `aws sso login --sso-session ringee`. Después, en una terminal que quede abierta:
+
+```bash
+scripts/db-tunnel.sh prod       # localhost:15432
+scripts/db-tunnel.sh staging    # localhost:15433
+```
+
+- La tarea tarda alrededor de un minuto en arrancar. Ctrl+C cierra el túnel y la detiene; si la terminal muere, se detiene sola a las 8 horas (`TUNNEL_HOURS`). Cuesta menos de 2 centavos por hora.
+- La base de staging está apagada de noche y los fines de semana. El script la enciende (entre 5 y 10 minutos) y la vuelve a apagar al cerrar el túnel, salvo que los servicios de staging hayan arrancado mientras tanto.
+- Si Session Manager corta la sesión (20 minutos sin tráfico, un cambio de red), el script la reabre sobre la misma tarea.
+
+En DBeaver, una conexión PostgreSQL por entorno:
+
+| Campo         | prod            | staging         |
+| ------------- | --------------- | --------------- |
+| Host          | `localhost`     | `localhost`     |
+| Puerto        | `15432`         | `15433`         |
+| Base          | `ringee`        | `ringee`        |
+| Usuario       | `ringee_editor` | `ringee_editor` |
+| SSL (pestaña) | modo `require`  | modo `require`  |
+
+- **Contraseña:** `scripts/db-tunnel.sh <env> password` la copia al portapapeles sin mostrarla. Guárdala en DBeaver; solo cambia si se rota.
+- **`ringee_editor`** lee, modifica y crea en la base `ringee`. Cada sesión entra como `ringee_app`, así que puede todo lo que puede la app, y lo que crees queda a nombre de `ringee_app`, como lo de las migraciones, para que una migración posterior pueda cambiarlo. No ve las bases de Temporal y admite 10 conexiones a la vez.
+- **Frenos para no trabar producción.** Una transacción abierta guarda sus bloqueos: un `UPDATE` sin confirmar detiene las escrituras de la app sobre esas filas, y un `ALTER TABLE` que espera un bloqueo detiene todas las consultas que llegan detrás. Por eso el servidor revierte una transacción que lleva 5 minutos sin actividad, y cancela la consulta que espera un bloqueo más de 10 segundos o que dura más de 2 minutos. Para una migración a mano o un `UPDATE` grande, `SET statement_timeout = 0;` antes, en la misma sesión.
+- **Deja el auto-commit encendido**, el valor por defecto de DBeaver. Si trabajas en modo manual (el tipo de conexión _Production_ lo usa y además pide confirmar cada ejecución), confirma o revierte enseguida.
+- En _Connection settings → Initialization_, pon _Keep-Alive_ a 60 segundos para que la sesión nunca quede inactiva.
+- El rol lo crea `db-bootstrap` (`scripts/run-task.sh <env> db-bootstrap`).
 
 ## Comprobado y pendiente
 

@@ -7,6 +7,12 @@ variable "cidr" {
   type = string
 }
 
+variable "peer_routes" {
+  description = "Private CIDR => VPC peering connection, forwarded to the network module."
+  type        = map(string)
+  default     = {}
+}
+
 variable "internal_domain" {
   type    = string
   default = "ringee.internal"

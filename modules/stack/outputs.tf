@@ -11,6 +11,19 @@ output "cluster_name" {
   value = module.cluster.name
 }
 
+output "provider_dispatch_network" {
+  description = "Private coordination infrastructure uses the existing network and caller security groups."
+  value = {
+    vpc_id             = module.network.vpc_id
+    private_subnet_ids = module.network.private_subnet_ids
+    caller_security_group_ids = {
+      api          = module.security.ids["api"]
+      orchestrator = module.security.ids["orchestrator"]
+      ops          = module.security.ids["ops"]
+    }
+  }
+}
+
 output "task_subnet_ids" {
   value = module.network.public_subnet_ids
 }

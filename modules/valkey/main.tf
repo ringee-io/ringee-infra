@@ -36,7 +36,7 @@ resource "aws_elasticache_replication_group" "this" {
   auth_token                 = random_password.auth.result
 
   maintenance_window         = "sat:05:00-sat:06:00" # Saturday 01:00–02:00 in Santo Domingo
-  snapshot_retention_limit   = 0
+  snapshot_retention_limit   = var.snapshot_retention_limit
   auto_minor_version_upgrade = true
   apply_immediately          = var.apply_immediately
 }

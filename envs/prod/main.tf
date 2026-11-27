@@ -35,6 +35,7 @@ module "stack" {
 
   env          = "prod"
   cidr         = "10.40.0.0/16"
+  peer_routes  = { "10.41.0.0/23" = aws_vpc_peering_connection.provider_dispatch.id }
   api_host     = "api.ringee.io"
   chatgpt_host = "chatgpt.ringee.io"
   # api2.ringee.io reaches this stack before the cutover, while api.ringee.io

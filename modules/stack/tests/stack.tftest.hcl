@@ -125,7 +125,7 @@ variables {
   valkey = { node_type = "cache.t4g.micro", nodes = 1, engine_version = "8.2" }
 
   secret_keys = {
-    shared        = ["STRIPE_SECRET_KEY", "TELNYX_API_KEY"]
+    shared        = ["STRIPE_SECRET_KEY", "TELNYX_API_KEY", "PROVIDER_DISPATCH_REDIS_URL", "TELNYX_ACCOUNT_REF", "TELNYX_CPS_MODE", "TELNYX_CPS_CEILING", "TELNYX_CPS_SAFETY_MARGIN"]
     api           = ["OPENAI_APPS_CHALLENGE_TOKEN"]
     orchestrator  = []
     "chatgpt-mcp" = ["RINGEE_BACKEND_URL"]
@@ -212,6 +212,21 @@ run "guard_rejects_overlapping_scopes" {
     secret_keys = {
       shared        = ["STRIPE_SECRET_KEY"]
       api           = ["STRIPE_SECRET_KEY"]
+      orchestrator  = []
+      "chatgpt-mcp" = []
+    }
+  }
+
+  expect_failures = [terraform_data.secret_keys_guard]
+}
+
+run "guard_rejects_missing_dispatch_coordination" {
+  command = plan
+
+  variables {
+    secret_keys = {
+      shared        = ["STRIPE_SECRET_KEY", "TELNYX_API_KEY"]
+      api           = []
       orchestrator  = []
       "chatgpt-mcp" = []
     }

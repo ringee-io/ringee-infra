@@ -55,6 +55,14 @@ resource "aws_route_table" "public" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.this.id
   }
+
+  dynamic "route" {
+    for_each = var.peer_routes
+    content {
+      cidr_block                = route.key
+      vpc_peering_connection_id = route.value
+    }
+  }
 }
 
 resource "aws_route_table_association" "public" {
@@ -67,6 +75,14 @@ resource "aws_route_table_association" "public" {
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
   tags   = { Name = "${var.name}-private" }
+
+  dynamic "route" {
+    for_each = var.peer_routes
+    content {
+      cidr_block                = route.key
+      vpc_peering_connection_id = route.value
+    }
+  }
 }
 
 resource "aws_route_table_association" "private" {

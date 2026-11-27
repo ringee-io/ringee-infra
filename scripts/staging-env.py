@@ -31,6 +31,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from provider_dispatch_config import MANAGED_KEYS as DISPATCH_MANAGED_KEYS
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / "staging.env"
@@ -151,7 +152,7 @@ def template(_args) -> None:
         "",
     ]
     counts = {"copied": 0, "mapped": 0, "generated": 0, "placeholder": 0, "empty": 0}
-    for name in sorted(scopes_of):
+    for name in sorted(set(scopes_of) - DISPATCH_MANAGED_KEYS):
         value = prod.get(name, "")
         notes = []
         if name in required:
@@ -206,7 +207,7 @@ def load(args) -> None:
     staging = parse(ENV_FILE)
     keys, prod = production_values()
     required = required_variables()
-    names = sorted({name for scope in keys.values() for name in scope})
+    names = sorted({name for scope in keys.values() for name in scope} - DISPATCH_MANAGED_KEYS)
 
     missing = [n for n in names if n not in staging]
     empty_required = [n for n in names if n in required and not staging.get(n)]
@@ -230,10 +231,22 @@ def load(args) -> None:
     if account != args.expect_account:
         sys.exit(f"Refusing to write: the AWS session is account {account}, not {args.expect_account}")
     for scope, scope_names in keys.items():
+        # Account coordination is provisioned separately and intentionally
+        # shared with production. A staging.env reload must never erase it.
+        owned = DISPATCH_MANAGED_KEYS.intersection(scope_names)
+        existing = json.loads(module.aws([
+            "secretsmanager", "get-secret-value", "--region", args.region,
+            "--secret-id", f"ringee/staging/{scope}", "--output", "json",
+        ])) if owned else None
+        preserved = json.loads(existing["SecretString"]) if existing else {}
+        if any(not preserved.get(name) for name in owned):
+            sys.exit("Run scripts/provider_dispatch_config.py --apply before loading staging.env")
+        values = {n: staging[n] for n in scope_names if n not in DISPATCH_MANAGED_KEYS}
+        values.update({n: preserved[n] for n in owned})
         module.aws(
             ["secretsmanager", "put-secret-value", "--region", args.region,
              "--secret-id", f"ringee/staging/{scope}", "--secret-string", "file:///dev/stdin"],
-            stdin=json.dumps({n: staging[n] for n in scope_names}),
+            stdin=json.dumps(values),
         )
         print(f"ringee/staging/{scope}: {len(scope_names)} variables written")
     print(f"\nDone. Delete {ENV_FILE.name} or keep it in your password manager.")

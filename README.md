@@ -34,6 +34,59 @@ Decidido el 4 de noviembre de 2026: **nivel B** (RDS Multi-AZ y 2 tareas de API)
 
 ## Orden de arranque
 
+### Despacho saliente compartido (CPS)
+
+La API y el worker necesitan `PROVIDER_DISPATCH_REDIS_URL` incluso con
+`DISPATCH_QUEUE_ENABLED=false`. Si falta, `enforce` difiere todas las llamadas
+salientes. `REDIS_URL` sigue siendo la caché de cada entorno y no sustituye esta
+coordinación: staging y producción comparten la cuenta Telnyx `ringee-managed`.
+
+`envs/prod/provider-dispatch.tf` crea un Valkey dedicado con TLS, dos nodos,
+failover, política `noeviction` y siete días de snapshots. El acceso de staging
+usa VPC peering privado: solo sus subredes de tareas llegan al puerto 6379 del
+coordinador. Los grupos de seguridad de RDS y de las cachés siguen separados.
+Las rutas las administra `modules/network`, junto con las rutas existentes.
+
+Para la primera instalación, crear primero el coordinador y la solicitud de
+peering en producción; poner la salida `provider_dispatch_peering_id` en
+`envs/staging/terraform.tfvars` y aplicar staging para aceptar el peering; luego
+completar el apply de ambos entornos. El rol `github-terraform-plan` de producción
+necesita la actualización de `bootstrap/main.tf` para refrescar el nuevo secreto.
+
+Con ambos perfiles SSO activos, ejecutar desde este repositorio:
+
+```bash
+python3 scripts/provider_dispatch_config.py          # solo nombres de claves
+python3 scripts/provider_dispatch_config.py --apply  # valores por stdin, nunca logs
+```
+
+El script conserva las demás credenciales y fija en ambos entornos la misma
+URL/base Redis, referencia de cuenta, modo `enforce`, techo de 5 CPS y margen de
+20% (ritmo efectivo de 4 CPS). Deja la cola desactivada. Se niega a sustituir
+un coordinador existente: ese cambio requiere drenar antes todos los procesos
+que originan llamadas. Los overrides de backoffice se conservan en PostgreSQL;
+ambos entornos deben mantener una política compatible.
+
+Aplicar las definiciones Terraform y desplegar **API y orchestrator**, conservando
+las imágenes actuales cuando solo cambia la configuración. ECS carga los secretos
+al arrancar; actualizar Secrets Manager por sí solo no actualiza las tareas.
+`scripts/staging-env.py load` preserva estas seis claves; no se ponen en
+`staging.env`. El guard del stack impide eliminar la coordinación de `shared`.
+El exportador histórico de Railway no es una fuente de configuración de despacho.
+
+Antes del rollout, comprobar las cuatro tablas `CreditReservation`,
+`AiVoiceAgentCallDispatch`, `ProviderDispatchHour`, `ProviderDispatchSetting` y
+los estados `queued`, `cancelled`, `expired` de `AiVoiceAgentCallStatus`. Las
+migraciones de la app se ejecutan manualmente, fuera de workflows y startup.
+Verificar desde las dos redes el PING/TIME/Lua de Redis y una admisión del
+servicio de despacho sin contactar Telnyx, y comprobar que las tareas nuevas
+quedan estables y que no reaparece `coordination_unavailable`.
+
+No vaciar claves de pacing ni cambiar la referencia para reiniciar capacidad.
+Ante una caída del coordinador, conservar el rechazo seguro de nuevas salidas.
+
+### Arranque de un entorno nuevo
+
 Requisitos: AWS-03 hecho (Organizations, `ringee-prod` y `ringee-staging`, IAM Identity Center), `aws configure sso` con un perfil por cuenta, y Terraform 1.10 o más nuevo. Cada paso se hace primero en staging.
 
 En una cuenta nueva, crea antes los roles de servicio de ECS y ElastiCache; si no, el primer `apply` puede fallar mientras se propagan:

@@ -36,3 +36,9 @@ variable "apply_immediately" {
   type    = bool
   default = false
 }
+
+variable "snapshot_retention_limit" {
+  description = "Daily snapshot retention. Application caches default to no snapshots; dispatch coordination retains them."
+  type        = number
+  default     = 0
+}

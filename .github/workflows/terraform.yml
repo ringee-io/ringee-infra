@@ -69,8 +69,13 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
       - run: terraform fmt -check -recursive
+      - run: python3 -m unittest discover -s scripts/tests
       - run: terraform -chdir=modules/stack init -backend=false -input=false
       - run: terraform -chdir=modules/stack test
+      - run: terraform -chdir=envs/prod init -backend=false -input=false
+      - run: terraform -chdir=envs/prod test
+      - run: terraform -chdir=envs/staging init -backend=false -input=false
+      - run: terraform -chdir=envs/staging test
 
   plan:
     name: Plan ${{ needs.target.outputs.stack }}

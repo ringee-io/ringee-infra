@@ -35,6 +35,7 @@ module "stack" {
 
   env          = "staging"
   cidr         = "10.41.0.0/16"
+  peer_routes  = var.provider_dispatch_peering_id == null ? {} : { "10.40.100.0/23" = var.provider_dispatch_peering_id }
   api_host     = "api.staging.ringee.io"
   chatgpt_host = "chatgpt.staging.ringee.io"
   running      = var.running

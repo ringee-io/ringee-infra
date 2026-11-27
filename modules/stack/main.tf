@@ -37,6 +37,14 @@ locals {
 resource "terraform_data" "secret_keys_guard" {
   lifecycle {
     precondition {
+      condition = alltrue([for name in [
+        "PROVIDER_DISPATCH_REDIS_URL", "TELNYX_ACCOUNT_REF", "TELNYX_CPS_MODE",
+        "TELNYX_CPS_CEILING", "TELNYX_CPS_SAFETY_MARGIN",
+      ] : contains(var.secret_keys["shared"], name)])
+      error_message = "API and orchestrator must receive the same account-scoped dispatch Redis and CPS policy through shared secrets."
+    }
+
+    precondition {
       condition     = length(setintersection(toset(flatten(values(var.secret_keys))), toset(local.managed_variables))) == 0
       error_message = "config/secret-keys.json lists a variable this stack sets itself. Re-run scripts/railway-env.py."
     }
@@ -54,9 +62,10 @@ resource "terraform_data" "secret_keys_guard" {
 # ── Network, registry, data ──────────────────────────────────────────────────
 
 module "network" {
-  source = "../network"
-  name   = local.name
-  cidr   = var.cidr
+  source      = "../network"
+  name        = local.name
+  cidr        = var.cidr
+  peer_routes = var.peer_routes
 }
 
 module "security" {

@@ -204,7 +204,8 @@ resource "aws_iam_role_policy_attachment" "plan_read_only" {
 }
 
 # A plan refreshes the secret versions this stack writes (ringee/<env>/generated
-# and ringee/<env>/editor) and writes the lock file.
+# and ringee/<env>/editor, plus production's account-scoped dispatch secret)
+# and writes the lock file.
 resource "aws_iam_role_policy" "plan_state" {
   name = "state-and-generated-secret"
   role = aws_iam_role.github["terraform-plan"].id
@@ -225,10 +226,12 @@ resource "aws_iam_role_policy" "plan_state" {
       {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
-        Resource = [
+        Resource = concat([
           "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:ringee/${var.env}/generated-*",
           "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:ringee/${var.env}/editor-*",
-        ]
+          ], var.env == "prod" ? [
+          "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:ringee/provider-dispatch-*",
+        ] : [])
       },
     ]
   })
